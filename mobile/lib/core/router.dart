@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../features/auction/auction_room_screen.dart';
 import 'providers/auth_provider.dart';
 
 /// Route paths.
@@ -110,8 +111,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: AppRoutes.auction,
-        builder: (_, state) => _PlaceholderScreen(
-          'Auction ${state.pathParameters["id"]}',
+        builder: (_, state) => AuctionRoomScreen(
+          auctionId: state.pathParameters['id']!,
         ),
       ),
       GoRoute(
