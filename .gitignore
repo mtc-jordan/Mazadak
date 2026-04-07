@@ -1,28 +1,61 @@
+# Environment
+.env
+.env.*
+!.env.example
+
 # Python
 __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
-build/
-.eggs/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+celerybeat-schedule*
 
-# Environment
-.env
-.env.local
-.env.production
+# RSA keys (generated locally)
+backend/keys/*.pem
 
-# Keys
-keys/
+# Node
+node_modules/
+.next/
+out/
+.turbo/
+
+# Flutter
+mobile/.dart_tool/
+mobile/.packages
+mobile/build/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/ios/Pods/
+mobile/ios/.symlinks/
+mobile/android/.gradle/
+mobile/android/local.properties
+*.g.dart
+*.freezed.dart
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.backup
+infra/terraform/.terraform.lock.hcl
 
 # IDE
-.vscode/
 .idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
+# Docker
+*.log
 
 # OS
-.DS_Store
 Thumbs.db
+Desktop.ini
