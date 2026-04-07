@@ -1,0 +1,105 @@
+[project]
+name = "mzadak-backend"
+version = "0.1.0"
+description = "MZADAK Backend API — Intelligent Auction Marketplace"
+requires-python = ">=3.12"
+dependencies = [
+    # --- Web framework ---
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-multipart>=0.0.12",
+
+    # --- Database (PostgreSQL async) ---
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+
+    # --- Redis ---
+    "redis[hiredis]>=5.2.0",
+
+    # --- Celery task queue ---
+    "celery[redis]>=5.4.0",
+
+    # --- WebSocket / real-time ---
+    "python-socketio>=5.11.0",
+
+    # --- Auth / JWT (RS256) ---
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "cryptography>=43.0.0",
+
+    # --- Validation / settings ---
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+
+    # --- HTTP client ---
+    "httpx>=0.28.0",
+
+    # --- Payments (Checkout.com) ---
+    "checkout-sdk>=3.0.0",
+
+    # --- Search (Meilisearch) ---
+    "meilisearch>=0.31.0",
+
+    # --- Analytics (ClickHouse) ---
+    "clickhouse-connect>=0.8.0",
+
+    # --- AWS (S3, Rekognition, Secrets Manager) ---
+    "boto3>=1.35.0",
+
+    # --- Notifications ---
+    "firebase-admin>=6.5.0",        # FCM push
+    "twilio>=9.3.0",                # SMS / WhatsApp
+
+    # --- Shipping ---
+    "aramex-sdk>=1.0.0",
+
+    # --- Phone validation ---
+    "phonenumbers>=8.13.0",
+
+    # --- ML (Price Oracle — Phase 1: scikit-learn, Phase 2: XGBoost) ---
+    "scikit-learn>=1.5.0",
+    "numpy>=1.26.0",
+    "joblib>=1.4.0",
+
+    # --- Utilities ---
+    "orjson>=3.10.0",
+    "pillow>=11.0.0",
+    "python-dateutil>=2.9.0",
+    "imagehash>=4.3.0",             # perceptual hashing for duplicate detection
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "aiosqlite>=0.20.0",            # async SQLite for tests
+    "httpx>=0.28.0",                # ASGITransport test client
+    "factory-boy>=3.3.0",
+    "faker>=30.0.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "pre-commit>=4.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "ASYNC"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["app/tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+strict = true
