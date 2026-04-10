@@ -50,9 +50,9 @@ class UserAuction {
   double get displayPrice => currentPrice ?? startingPrice;
 
   factory UserAuction.fromJson(Map<String, dynamic> json) => UserAuction(
-        id: json['id'] as String,
-        listingId: json['listing_id'] as String? ?? json['id'] as String,
-        titleAr: json['title_ar'] as String,
+        id: (json['id'] as String?) ?? '',
+        listingId: (json['listing_id'] as String?) ?? (json['id'] as String?) ?? '',
+        titleAr: (json['title_ar'] as String?) ?? '',
         titleEn: json['title_en'] as String?,
         imageUrl: json['image_url'] as String? ?? '',
         startingPrice: (json['starting_price'] as num).toDouble(),
@@ -136,6 +136,7 @@ class MyAuctionsNotifier extends StateNotifier<MyAuctionsState> {
         active: _parse('active'),
         ended: _parse('ended'),
         won: _parse('won'),
+        isLoading: false,
       );
     } catch (e) {
       // Fallback to mock data when backend is unavailable (dev mode)
@@ -144,6 +145,7 @@ class MyAuctionsNotifier extends StateNotifier<MyAuctionsState> {
           active: _mockActive,
           ended: _mockEnded,
           won: _mockWon,
+          isLoading: false,
         );
       } else {
         state = state.copyWith(isLoading: false, error: e.toString());

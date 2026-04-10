@@ -252,6 +252,10 @@ async def dispatch_email(user: User, notification: Notification) -> dict:
     title = notification.title_ar if lang == "ar" else notification.title_en
     body = notification.body_ar if lang == "ar" else notification.body_en
 
+    if not title or not body:
+        logger.warning("Missing title or body for email notification user=%s", user.id)
+        return {"status": "skipped", "reason": "missing_content"}
+
     html_body = _build_email_html(title, body, lang)
 
     from app.core.config import settings
@@ -273,39 +277,43 @@ async def dispatch_email(user: User, notification: Notification) -> dict:
 
 def _build_email_html(title: str, body: str, lang: str) -> str:
     """Build a branded HTML email with MZADAK styling."""
+    from html import escape
+
     direction = "rtl" if lang == "ar" else "ltr"
     font_family = "'Segoe UI', Tahoma, Arial, sans-serif"
+    safe_title = escape(title)
+    safe_body = escape(body)
 
     return f"""\
 <!DOCTYPE html>
 <html lang="{lang}" dir="{direction}">
 <head><meta charset="UTF-8"></head>
-<body style="margin:0;padding:0;background-color:#FFF8F0;font-family:{font_family};">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#FFF8F0;">
+<body style="margin:0;padding:0;background-color:#FBF5E8;font-family:{font_family};">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#FBF5E8;">
     <tr>
       <td align="center" style="padding:24px 0;">
         <table width="600" cellpadding="0" cellspacing="0" style="background-color:#FFFFFF;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
           <!-- Header -->
           <tr>
-            <td style="background-color:#1B2A4A;padding:24px 32px;text-align:center;">
-              <h1 style="margin:0;color:#D4A853;font-size:28px;font-weight:700;letter-spacing:1px;">MZADAK</h1>
+            <td style="background-color:#1C3557;padding:24px 32px;text-align:center;">
+              <h1 style="margin:0;color:#9A6420;font-size:28px;font-weight:700;letter-spacing:1px;">MZADAK</h1>
             </td>
           </tr>
           <!-- Title -->
           <tr>
             <td style="padding:24px 32px 8px 32px;">
-              <h2 style="margin:0;color:#1B2A4A;font-size:20px;font-weight:600;direction:{direction};text-align:start;">{title}</h2>
+              <h2 style="margin:0;color:#1C3557;font-size:20px;font-weight:600;direction:{direction};text-align:start;">{safe_title}</h2>
             </td>
           </tr>
           <!-- Body -->
           <tr>
             <td style="padding:8px 32px 32px 32px;">
-              <p style="margin:0;color:#333333;font-size:16px;line-height:1.6;direction:{direction};text-align:start;">{body}</p>
+              <p style="margin:0;color:#333333;font-size:16px;line-height:1.6;direction:{direction};text-align:start;">{safe_body}</p>
             </td>
           </tr>
           <!-- Footer -->
           <tr>
-            <td style="background-color:#F5F5F5;padding:16px 32px;text-align:center;border-top:2px solid #D4A853;">
+            <td style="background-color:#F5F5F5;padding:16px 32px;text-align:center;border-top:2px solid #9A6420;">
               <p style="margin:0;color:#888888;font-size:12px;">&copy; MZADAK &mdash; مزادك</p>
             </td>
           </tr>
@@ -341,7 +349,8 @@ async def _send_email_smtp(
             port=settings.SMTP_PORT,
             username=settings.SMTP_USERNAME or None,
             password=settings.SMTP_PASSWORD or None,
-            start_tls=True,
+            start_tls=settings.SMTP_PORT != 465,
+            use_tls=settings.SMTP_PORT == 465,
         )
         return True
     except ImportError:
