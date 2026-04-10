@@ -1,10 +1,25 @@
-"""Complete MZADAK schema — all tables, enums, indexes, triggers, REVOKE.
+"""Complete MZADAK schema — all tables, indexes, triggers, REVOKE.
 
 Revision ID: 0001_initial
 Revises: None
 Create Date: 2026-04-07
 
-Money columns use INTEGER (cents/fils) — 1 JOD = 1000 fils.
+Matches ORM models exactly:
+  auth.models       — users, user_kyc_documents, refresh_tokens
+  listing.models    — listings, listing_images
+  auction.models    — auctions, bids, proxy_bids
+  escrow.models     — escrows, escrow_events, disputes, dispute_evidence, ratings
+  notification.models — notifications, notification_preferences
+  ai.models         — ai_requests
+  admin.models      — admin_audit_log
+  whatsapp_bot.models — wa_accounts, bot_conversations
+
+Price units:
+  listings  → INTEGER cents  (1 JOD = 100 cents, min 100 = 1 JOD)
+  auctions  → Numeric(10,3)  (JOD float, e.g. 25.000)
+  bids      → Numeric(10,3)  (JOD float)
+  escrows   → Numeric(10,3)  (JOD float)
+
 Append-only tables (bids, escrow_events) have REVOKE UPDATE/DELETE.
 updated_at trigger auto-maintained on mutable tables.
 """
@@ -12,7 +27,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSONB, INET
+from sqlalchemy.dialects.postgresql import ARRAY, UUID, JSONB, INET
 
 revision: str = "0001_initial"
 down_revision: Union[str, None] = None
@@ -20,75 +35,9 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-# =====================================================================
-# ENUM DEFINITIONS
-# =====================================================================
-
-ENUMS: dict[str, list[str]] = {
-    "user_role": ["buyer", "seller", "admin", "superadmin"],
-
-    "user_status": ["pending_kyc", "active", "suspended", "banned"],
-
-    "kyc_status": [
-        "not_started", "pending", "pending_review", "verified", "rejected",
-    ],
-
-    "listing_status": [
-        "draft", "pending_review", "active", "ended", "cancelled", "relisted",
-    ],
-
-    "listing_condition": [
-        "brand_new", "like_new", "very_good", "good", "acceptable",
-    ],
-
-    "auction_status": ["scheduled", "active", "ended", "cancelled"],
-
-    "escrow_status": [
-        "payment_pending", "funds_held", "shipping_requested",
-        "label_generated", "shipped", "in_transit", "delivered",
-        "inspection_period", "released", "disputed", "under_review",
-        "resolved_released", "resolved_refunded", "resolved_split", "cancelled",
-    ],
-
-    "dispute_reason": [
-        "not_as_described", "not_received", "damaged",
-        "counterfeit", "wrong_item", "other",
-    ],
-
-    "dispute_status": [
-        "open", "under_review", "resolved_buyer", "resolved_seller",
-        "resolved_split", "closed",
-    ],
-
-    "notification_channel": ["push", "whatsapp", "sms", "email"],
-
-    "notification_event": [
-        "outbid", "won", "lost", "auction_starting", "auction_ending",
-        "payment_request", "payment_received", "payment_failed",
-        "shipping_requested", "shipped", "delivered",
-        "inspection_started", "escrow_released", "escrow_refunded",
-        "dispute_opened", "dispute_resolved", "kyc_approved",
-        "kyc_rejected", "new_bid", "proxy_outbid",
-    ],
-
-    "payment_status": [
-        "pending", "captured", "failed", "refunded", "partially_refunded",
-    ],
-
-    "bid_status": ["accepted", "rejected", "retracted"],
-}
-
-
 def upgrade() -> None:
     # -----------------------------------------------------------------
-    # 1. Create all PostgreSQL enum types
-    # -----------------------------------------------------------------
-    for name, values in ENUMS.items():
-        vals = ", ".join(f"'{v}'" for v in values)
-        op.execute(f"CREATE TYPE {name} AS ENUM ({vals})")
-
-    # -----------------------------------------------------------------
-    # 2. Create mzadak_app_role (idempotent)
+    # 1. Create mzadak_app_role (idempotent)
     # -----------------------------------------------------------------
     op.execute("""
         DO $$ BEGIN
@@ -129,6 +78,7 @@ def upgrade() -> None:
     )
 
     # -- users --------------------------------------------------------
+    # ORM: auth.models.User (Base, TimestampMixin)
     op.create_table(
         "users",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -137,9 +87,9 @@ def upgrade() -> None:
         sa.Column("email", sa.String(255), nullable=True, unique=True),
         sa.Column("full_name", sa.String(255), nullable=True),
         sa.Column("full_name_ar", sa.String(255), nullable=True),
-        sa.Column("role", sa.Enum("buyer", "seller", "admin", "superadmin", name="user_role", create_type=False), nullable=False, server_default="buyer"),
-        sa.Column("status", sa.Enum("pending_kyc", "active", "suspended", "banned", name="user_status", create_type=False), nullable=False, server_default="pending_kyc"),
-        sa.Column("kyc_status", sa.Enum("not_started", "pending", "pending_review", "verified", "rejected", name="kyc_status", create_type=False), nullable=False, server_default="not_started"),
+        sa.Column("role", sa.String(20), nullable=False, server_default="buyer"),
+        sa.Column("status", sa.String(20), nullable=False, server_default="pending_kyc"),
+        sa.Column("kyc_status", sa.String(20), nullable=False, server_default="not_started"),
         sa.Column("kyc_submitted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("kyc_reviewed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("kyc_rejection_reason", sa.Text, nullable=True),
@@ -157,9 +107,10 @@ def upgrade() -> None:
         sa.Column("pro_expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("commission_rate", sa.Numeric(5, 4), server_default="0.0500", nullable=False),
         # -- WhatsApp bot link ----------------------------------------
-        sa.Column("fcm_tokens", JSONB, server_default="'[]'", nullable=False),
         sa.Column("whatsapp_linked", sa.Boolean, server_default="false", nullable=False),
         sa.Column("whatsapp_linked_at", sa.DateTime(timezone=True), nullable=True),
+        # -- FCM push tokens (JSON array) -----------------------------
+        sa.Column("fcm_tokens", JSONB, server_default="'[]'", nullable=True),
         # -- Preferences & tracking -----------------------------------
         sa.Column("preferred_language", sa.String(5), server_default="ar", nullable=False),
         sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True),
@@ -172,6 +123,7 @@ def upgrade() -> None:
     op.create_index("ix_users_ats_score_desc", "users", [sa.text("ats_score DESC")])
 
     # -- user_kyc_documents -------------------------------------------
+    # ORM: auth.models.UserKycDocument
     op.create_table(
         "user_kyc_documents",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -184,6 +136,7 @@ def upgrade() -> None:
     op.create_index("ix_user_kyc_documents_user_id", "user_kyc_documents", ["user_id"])
 
     # -- refresh_tokens -----------------------------------------------
+    # ORM: auth.models.RefreshToken
     op.create_table(
         "refresh_tokens",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -198,6 +151,8 @@ def upgrade() -> None:
     op.create_index("ix_refresh_tokens_token_hash", "refresh_tokens", ["token_hash"], unique=True)
 
     # -- listings -----------------------------------------------------
+    # ORM: listing.models.Listing (Base, TimestampMixin)
+    # Prices in INTEGER cents (1 JOD = 100 cents)
     op.create_table(
         "listings",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -207,11 +162,11 @@ def upgrade() -> None:
         sa.Column("title_ar", sa.String(200), nullable=False),
         sa.Column("description_en", sa.Text, nullable=True),
         sa.Column("description_ar", sa.Text, nullable=True),
-        sa.Column("condition", sa.Enum("brand_new", "like_new", "very_good", "good", "acceptable", name="listing_condition", create_type=False), nullable=False),
-        sa.Column("status", sa.Enum("draft", "pending_review", "active", "ended", "cancelled", "relisted", name="listing_status", create_type=False), nullable=False, server_default="draft"),
+        sa.Column("condition", sa.String(20), nullable=False),
+        sa.Column("status", sa.String(25), nullable=False, server_default="draft"),
         sa.Column("is_certified", sa.Boolean, server_default="false", nullable=False),
         sa.Column("is_charity", sa.Boolean, server_default="false", nullable=False),
-        sa.Column("ngo_id", sa.Integer, sa.ForeignKey("ngo_partners.id"), nullable=True),
+        sa.Column("ngo_id", sa.Integer, nullable=True),
         # -- Prices in INTEGER cents ----------------------------------
         sa.Column("starting_price", sa.Integer, nullable=False),
         sa.Column("reserve_price", sa.Integer, nullable=True),
@@ -246,6 +201,7 @@ def upgrade() -> None:
     op.create_index("ix_listings_phash", "listings", ["phash"], postgresql_where=sa.text("phash IS NOT NULL"))
 
     # -- listing_images -----------------------------------------------
+    # ORM: listing.models.ListingImage
     op.create_table(
         "listing_images",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -260,126 +216,121 @@ def upgrade() -> None:
     op.create_index("ix_listing_images_listing_id", "listing_images", ["listing_id"])
 
     # -- auctions -----------------------------------------------------
+    # ORM: auction.models.Auction (Base, TimestampMixin)
+    # Prices in Numeric(10,3) — JOD float
     op.create_table(
         "auctions",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
         sa.Column("listing_id", UUID(as_uuid=False), sa.ForeignKey("listings.id"), nullable=False, unique=True),
-        sa.Column("seller_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("status", sa.String(20), nullable=False, server_default="scheduled"),
+        sa.Column("starts_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("ends_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("current_price", sa.Numeric(10, 3), nullable=False),
+        sa.Column("min_increment", sa.Numeric(10, 3), nullable=False, server_default="25.000"),
+        sa.Column("bid_count", sa.Integer, server_default="0", nullable=False),
+        sa.Column("extension_count", sa.Integer, server_default="0", nullable=False),
         sa.Column("winner_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=True),
-        sa.Column("status", sa.Enum("scheduled", "active", "ended", "cancelled", name="auction_status", create_type=False), nullable=False, server_default="scheduled"),
-        sa.Column("final_price", sa.Integer, nullable=True),
-        sa.Column("redis_initialized_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("redis_expired_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("final_price", sa.Numeric(10, 3), nullable=True),
+        sa.Column("reserve_met", sa.Boolean, nullable=True),
+        sa.Column("redis_synced_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
     )
     op.create_index("ix_auctions_status", "auctions", ["status"])
     op.create_index("ix_auctions_listing_id", "auctions", ["listing_id"], unique=True)
-    op.create_index("ix_auctions_seller_id", "auctions", ["seller_id"])
 
     # -- bids  (APPEND-ONLY) ------------------------------------------
+    # ORM: auction.models.Bid
+    # amount in Numeric(10,3) — JOD float
     op.create_table(
         "bids",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("listing_id", UUID(as_uuid=False), sa.ForeignKey("listings.id"), nullable=False),
         sa.Column("auction_id", UUID(as_uuid=False), sa.ForeignKey("auctions.id"), nullable=False),
-        sa.Column("bidder_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=False),
-        sa.Column("amount", sa.Integer, nullable=False),
-        sa.Column("status", sa.Enum("accepted", "rejected", "retracted", name="bid_status", create_type=False), nullable=False, server_default="accepted"),
-        sa.Column("rejection_reason", sa.String(100), nullable=True),
+        sa.Column("user_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("amount", sa.Numeric(10, 3), nullable=False),
+        sa.Column("currency", sa.Text, nullable=False, server_default="JOD"),
         sa.Column("is_proxy", sa.Boolean, server_default="false", nullable=False),
-        sa.Column("proxy_max", sa.Integer, nullable=True),
-        sa.Column("ip_address", INET, nullable=True),
-        sa.Column("user_agent", sa.Text, nullable=True),
+        sa.Column("fraud_score", sa.Float, nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.CheckConstraint("amount > 0", name="ck_bids_amount_positive"),
     )
-    op.create_index("ix_bids_listing_created", "bids", ["listing_id", sa.text("created_at DESC")])
-    op.create_index("ix_bids_bidder_id", "bids", ["bidder_id"])
     op.create_index("ix_bids_auction_id", "bids", ["auction_id"])
+    op.create_index("ix_bids_user_id", "bids", ["user_id"])
+    op.create_index("ix_bids_auction_created", "bids", ["auction_id", sa.text("created_at DESC")])
 
-    # -- escrows  (12-state FSM) --------------------------------------
+    # -- escrows  (FSM) -----------------------------------------------
+    # ORM: escrow.models.Escrow (Base, TimestampMixin)
+    # amount/seller_amount in Numeric(10,3) — JOD float
     op.create_table(
         "escrows",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
         sa.Column("auction_id", UUID(as_uuid=False), sa.ForeignKey("auctions.id"), nullable=False, unique=True),
-        sa.Column("listing_id", UUID(as_uuid=False), sa.ForeignKey("listings.id"), nullable=False),
-        sa.Column("buyer_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("winner_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("seller_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=False),
-        # -- Money (INTEGER cents) ------------------------------------
-        sa.Column("amount", sa.Integer, nullable=False),
-        sa.Column("platform_fee", sa.Integer, nullable=False),
-        sa.Column("seller_payout", sa.Integer, nullable=False),
-        # -- State machine --------------------------------------------
-        sa.Column("state", sa.Enum(
-            "payment_pending", "funds_held", "shipping_requested",
-            "label_generated", "shipped", "in_transit", "delivered",
-            "inspection_period", "released", "disputed", "under_review",
-            "resolved_released", "resolved_refunded", "resolved_split", "cancelled",
-            name="escrow_status", create_type=False,
-        ), nullable=False, server_default="payment_pending"),
+        sa.Column("mediator_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=True),
+        sa.Column("state", sa.String(25), nullable=False, server_default="payment_pending"),
+        # -- Money (Numeric JOD) --------------------------------------
+        sa.Column("amount", sa.Numeric(10, 3), nullable=False),
+        sa.Column("currency", sa.Text, nullable=False, server_default="JOD"),
+        sa.Column("seller_amount", sa.Numeric(10, 3), nullable=True),
         # -- Payment --------------------------------------------------
-        sa.Column("checkout_payment_id", sa.String(200), nullable=True),
-        sa.Column("checkout_payment_intent_id", sa.String(200), nullable=True),
+        sa.Column("payment_intent_id", sa.Text, nullable=True),
+        sa.Column("checkout_payment_id", sa.Text, nullable=True),
+        sa.Column("payment_link", sa.Text, nullable=True),
         # -- Shipping -------------------------------------------------
-        sa.Column("tracking_number", sa.String(200), nullable=True),
-        sa.Column("carrier", sa.String(100), nullable=True),
-        sa.Column("tracking_url", sa.String(500), nullable=True),
+        sa.Column("tracking_number", sa.Text, nullable=True),
+        sa.Column("carrier", sa.String(20), nullable=True),
+        # -- Dispute --------------------------------------------------
+        sa.Column("dispute_reason", sa.Text, nullable=True),
+        sa.Column("evidence_s3_keys", ARRAY(sa.Text), nullable=True),
+        sa.Column("evidence_hashes", ARRAY(sa.Text), nullable=True),
         # -- Deadlines ------------------------------------------------
         sa.Column("payment_deadline", sa.DateTime(timezone=True), nullable=True),
         sa.Column("shipping_deadline", sa.DateTime(timezone=True), nullable=True),
         sa.Column("inspection_deadline", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("evidence_deadline", sa.DateTime(timezone=True), nullable=True),
         sa.Column("release_deadline", sa.DateTime(timezone=True), nullable=True),
         # -- Transition tracking --------------------------------------
         sa.Column("last_transition_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("transition_count", sa.Integer, server_default="0", nullable=False),
+        sa.Column("retry_count", sa.Integer, server_default="0", nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
     )
     op.create_index("ix_escrows_state", "escrows", ["state"])
-    op.create_index("ix_escrows_buyer_id", "escrows", ["buyer_id"])
+    op.create_index("ix_escrows_winner_id", "escrows", ["winner_id"])
     op.create_index("ix_escrows_seller_id", "escrows", ["seller_id"])
     op.create_index("ix_escrows_payment_deadline", "escrows", ["payment_deadline"])
 
     # -- escrow_events  (APPEND-ONLY audit trail) ---------------------
+    # ORM: escrow.models.EscrowEvent
     op.create_table(
         "escrow_events",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
         sa.Column("escrow_id", UUID(as_uuid=False), sa.ForeignKey("escrows.id"), nullable=False),
-        sa.Column("from_state", sa.Enum(
-            "payment_pending", "funds_held", "shipping_requested",
-            "label_generated", "shipped", "in_transit", "delivered",
-            "inspection_period", "released", "disputed", "under_review",
-            "resolved_released", "resolved_refunded", "resolved_split", "cancelled",
-            name="escrow_status", create_type=False,
-        ), nullable=False),
-        sa.Column("to_state", sa.Enum(
-            "payment_pending", "funds_held", "shipping_requested",
-            "label_generated", "shipped", "in_transit", "delivered",
-            "inspection_period", "released", "disputed", "under_review",
-            "resolved_released", "resolved_refunded", "resolved_split", "cancelled",
-            name="escrow_status", create_type=False,
-        ), nullable=False),
+        sa.Column("from_state", sa.Text, nullable=False),
+        sa.Column("to_state", sa.Text, nullable=False),
         sa.Column("actor_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=True),
-        sa.Column("actor_type", sa.String(20), nullable=False),
-        sa.Column("trigger", sa.String(100), nullable=False),
-        sa.Column("metadata", JSONB, server_default="'{}'", nullable=False),
+        sa.Column("actor_type", sa.String(10), nullable=False),
+        sa.Column("trigger", sa.Text, nullable=False),
+        sa.Column("meta", JSONB, nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
     )
+    op.create_index("ix_escrow_events_escrow_id", "escrow_events", ["escrow_id"])
     op.create_index("ix_escrow_events_escrow_created", "escrow_events", ["escrow_id", "created_at"])
 
     # -- disputes -----------------------------------------------------
+    # ORM: escrow.models.Dispute (Base, TimestampMixin)
     op.create_table(
         "disputes",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
         sa.Column("escrow_id", UUID(as_uuid=False), sa.ForeignKey("escrows.id"), nullable=False),
         sa.Column("buyer_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("seller_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=False),
-        sa.Column("reason", sa.Enum("not_as_described", "not_received", "damaged", "counterfeit", "wrong_item", "other", name="dispute_reason", create_type=False), nullable=False),
+        sa.Column("reason", sa.String(30), nullable=False),
         sa.Column("reason_detail", sa.Text, nullable=True),
         sa.Column("desired_resolution", sa.String(50), nullable=True),
-        sa.Column("status", sa.Enum("open", "under_review", "resolved_buyer", "resolved_seller", "resolved_split", "closed", name="dispute_status", create_type=False), nullable=False, server_default="open"),
+        sa.Column("status", sa.String(20), nullable=False, server_default="open"),
         sa.Column("admin_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=True),
         sa.Column("admin_ruling", sa.Text, nullable=True),
         sa.Column("admin_ruled_at", sa.DateTime(timezone=True), nullable=True),
@@ -393,6 +344,7 @@ def upgrade() -> None:
     op.create_index("ix_disputes_status", "disputes", ["status"])
 
     # -- dispute_evidence ---------------------------------------------
+    # ORM: escrow.models.DisputeEvidence
     op.create_table(
         "dispute_evidence",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -407,19 +359,12 @@ def upgrade() -> None:
     op.create_index("ix_dispute_evidence_dispute_id", "dispute_evidence", ["dispute_id"])
 
     # -- notifications ------------------------------------------------
+    # ORM: notification.models.Notification
     op.create_table(
         "notifications",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
         sa.Column("user_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=False),
-        sa.Column("event_type", sa.Enum(
-            "outbid", "won", "lost", "auction_starting", "auction_ending",
-            "payment_request", "payment_received", "payment_failed",
-            "shipping_requested", "shipped", "delivered",
-            "inspection_started", "escrow_released", "escrow_refunded",
-            "dispute_opened", "dispute_resolved", "kyc_approved",
-            "kyc_rejected", "new_bid", "proxy_outbid",
-            name="notification_event", create_type=False,
-        ), nullable=False),
+        sa.Column("event_type", sa.String(50), nullable=False),
         sa.Column("entity_id", UUID(as_uuid=False), nullable=True),
         sa.Column("entity_type", sa.String(50), nullable=True),
         sa.Column("title_en", sa.String(200), nullable=True),
@@ -436,6 +381,7 @@ def upgrade() -> None:
     op.create_index("ix_notifications_user_created", "notifications", ["user_id", sa.text("created_at DESC")])
 
     # -- ratings ------------------------------------------------------
+    # ORM: escrow.models.Rating
     op.create_table(
         "ratings",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -499,6 +445,7 @@ def upgrade() -> None:
     op.create_index("ix_b2b_bids_bidder_id", "b2b_bids", ["bidder_id"])
 
     # -- admin_audit_log ----------------------------------------------
+    # ORM: admin.models.AdminAuditLog
     op.create_table(
         "admin_audit_log",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -508,13 +455,14 @@ def upgrade() -> None:
         sa.Column("entity_id", UUID(as_uuid=False), nullable=True),
         sa.Column("before_state", JSONB, nullable=True),
         sa.Column("after_state", JSONB, nullable=True),
-        sa.Column("ip_address", INET, nullable=True),
+        sa.Column("ip_address", sa.Text, nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
     )
     op.create_index("ix_admin_audit_admin_created", "admin_audit_log", ["admin_id", sa.text("created_at DESC")])
     op.create_index("ix_admin_audit_entity", "admin_audit_log", ["entity_type", "entity_id"])
 
     # -- proxy_bids ---------------------------------------------------
+    # ORM: auction.models.ProxyBid (Base, TimestampMixin)
     op.create_table(
         "proxy_bids",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -528,23 +476,26 @@ def upgrade() -> None:
     op.create_index("ix_proxy_bids_auction_id", "proxy_bids", ["auction_id"])
 
     # -- ai_requests --------------------------------------------------
+    # ORM: ai.models.AIRequest (Base, TimestampMixin)
     op.create_table(
         "ai_requests",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("request_type", sa.String(50), nullable=False),
+        sa.Column("request_type", sa.String(30), nullable=False),
         sa.Column("user_id", UUID(as_uuid=False), sa.ForeignKey("users.id"), nullable=True),
         sa.Column("listing_id", UUID(as_uuid=False), sa.ForeignKey("listings.id"), nullable=True),
         sa.Column("input_payload", JSONB, nullable=True),
         sa.Column("output_payload", JSONB, nullable=True),
         sa.Column("confidence", sa.Float, nullable=True),
         sa.Column("latency_ms", sa.Float, nullable=True),
-        sa.Column("status", sa.String(20), server_default="pending", nullable=False),
+        sa.Column("status", sa.String(15), server_default="pending", nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
     )
+    op.create_index("ix_ai_requests_request_type", "ai_requests", ["request_type"])
     op.create_index("ix_ai_requests_user_id", "ai_requests", ["user_id"])
 
     # -- wa_accounts --------------------------------------------------
+    # ORM: whatsapp_bot.models.WaAccount (Base, TimestampMixin)
     op.create_table(
         "wa_accounts",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -559,6 +510,7 @@ def upgrade() -> None:
     op.create_index("ix_wa_accounts_phone_active", "wa_accounts", ["wa_phone", "is_active"])
 
     # -- bot_conversations --------------------------------------------
+    # ORM: whatsapp_bot.models.BotConversation (Base, TimestampMixin)
     op.create_table(
         "bot_conversations",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -574,6 +526,7 @@ def upgrade() -> None:
     op.create_index("ix_bot_conversations_wa_phone", "bot_conversations", ["wa_phone"])
 
     # -- notification_preferences -------------------------------------
+    # ORM: notification.models.NotificationPreference
     op.create_table(
         "notification_preferences",
         sa.Column("id", UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -617,7 +570,7 @@ def upgrade() -> None:
         END;
         $$ LANGUAGE plpgsql
     """)
-    for table in ["users", "listings", "escrows", "disputes",
+    for table in ["users", "listings", "auctions", "escrows", "disputes",
                   "proxy_bids", "ai_requests", "wa_accounts", "bot_conversations"]:
         op.execute(f"CREATE TRIGGER trg_{table}_updated_at BEFORE UPDATE ON {table} FOR EACH ROW EXECUTE FUNCTION update_updated_at()")
 
@@ -683,7 +636,3 @@ def downgrade() -> None:
 
     # Drop role
     op.execute("DROP ROLE IF EXISTS mzadak_app_role")
-
-    # Drop enums in reverse
-    for name in reversed(list(ENUMS.keys())):
-        op.execute(f"DROP TYPE IF EXISTS {name}")

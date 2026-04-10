@@ -23,6 +23,7 @@ from app.services.escrow.models import *      # noqa: F401,F403
 from app.services.notification.models import *  # noqa: F401,F403
 from app.services.ai.models import *          # noqa: F401,F403
 from app.services.whatsapp_bot.models import *  # noqa: F401,F403
+from app.services.admin.models import *        # noqa: F401,F403
 
 config = context.config
 
