@@ -106,7 +106,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
 
     try {
-      await api.post('/auth/otp/request', data: {'phone': phone});
+      await api.post('/auth/register', data: {'phone': phone});
     } catch (e) {
       rethrow;
     }
@@ -140,9 +140,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
 
     try {
-      final resp = await api.post('/auth/otp/verify', data: {
+      final resp = await api.post('/auth/verify-otp', data: {
         'phone': phone,
-        'code': code,
+        'otp': code,
       });
       final data = resp.data as Map<String, dynamic>;
 

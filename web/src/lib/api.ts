@@ -19,6 +19,53 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// 401 response interceptor — attempt token refresh
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    if (
+      error.response?.status === 401 &&
+      !originalRequest._retry &&
+      typeof window !== "undefined"
+    ) {
+      originalRequest._retry = true;
+
+      const refreshToken = localStorage.getItem("admin_refresh_token");
+      if (refreshToken) {
+        try {
+          const res = await axios.post(`${BASE}/api/v1/auth/refresh`, {
+            refresh_token: refreshToken,
+          });
+
+          const { access_token, refresh_token: newRefresh } = res.data;
+          localStorage.setItem("admin_token", access_token);
+          if (newRefresh) {
+            localStorage.setItem("admin_refresh_token", newRefresh);
+          }
+
+          originalRequest.headers.Authorization = `Bearer ${access_token}`;
+          return api(originalRequest);
+        } catch {
+          // Refresh failed — clear and redirect
+          localStorage.removeItem("admin_token");
+          localStorage.removeItem("admin_refresh_token");
+          window.location.href = "/login";
+          return Promise.reject(error);
+        }
+      }
+
+      // No refresh token — clear and redirect
+      localStorage.removeItem("admin_token");
+      localStorage.removeItem("admin_refresh_token");
+      window.location.href = "/login";
+    }
+
+    return Promise.reject(error);
+  }
+);
+
 // ── Moderation ──────────────────────────────────────────────
 
 export const moderation = {

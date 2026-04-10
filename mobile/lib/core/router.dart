@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../features/auction/auction_room_screen.dart';
 import '../features/escrow/escrow_order_screen.dart';
+import '../features/listing/create_listing_screen.dart';
 import '../screens/auction/live_video_auction_screen.dart';
 import '../screens/b2b/tender_room_screen.dart';
 import '../screens/buyer/my_bids_screen.dart';
@@ -229,7 +230,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: AppRoutes.createListing,
         pageBuilder: (_, __) => DimmedSlideFromBottomPage(
-          child: const _PlaceholderScreen('Create Listing'),
+          child: const CreateListingScreen(),
         ),
       ),
 

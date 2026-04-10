@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { AuthGuard, useAuth } from "@/lib/auth";
 import {
   Shield,
   Scale,
@@ -41,8 +42,10 @@ export default function AdminLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const { user, logout } = useAuth();
 
   return (
+    <AuthGuard>
     <div className="flex h-screen overflow-hidden">
       {/* ── Sidebar ─────────────────────────────────────────── */}
       <aside className="w-60 flex-shrink-0 bg-navy-dark flex flex-col">
@@ -93,7 +96,16 @@ export default function AdminLayout({
 
         {/* Footer */}
         <div className="p-3 border-t border-white/10">
-          <button className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm text-white/40 hover:text-white/80 hover:bg-white/5 transition-colors">
+          {user && (
+            <div className="px-3 py-2 mb-1 text-xs text-white/50 truncate">
+              {user.name}
+              <span className="ml-1 text-white/30">({user.role})</span>
+            </div>
+          )}
+          <button
+            onClick={() => logout()}
+            className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm text-white/40 hover:text-white/80 hover:bg-white/5 transition-colors"
+          >
             <LogOut size={18} />
             Sign out
           </button>
@@ -114,7 +126,9 @@ export default function AdminLayout({
           </div>
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-full bg-navy/10 flex items-center justify-center">
-              <span className="text-xs font-bold text-navy">A</span>
+              <span className="text-xs font-bold text-navy">
+                {user?.name?.charAt(0)?.toUpperCase() ?? "A"}
+              </span>
             </div>
           </div>
         </header>
@@ -123,5 +137,6 @@ export default function AdminLayout({
         <div className="flex-1 overflow-y-auto p-6">{children}</div>
       </main>
     </div>
+    </AuthGuard>
   );
 }
