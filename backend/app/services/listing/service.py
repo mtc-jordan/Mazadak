@@ -306,6 +306,15 @@ async def update_listing(
 
     await db.commit()
     await db.refresh(locked_listing)
+
+    # Sync to Meilisearch if active (title/price/condition may have changed)
+    if locked_listing.status == ListingStatus.ACTIVE.value:
+        try:
+            from app.tasks.listing import sync_listing_to_meilisearch
+            sync_listing_to_meilisearch.delay(str(locked_listing.id), action="index")
+        except Exception:
+            logger.warning("Failed to dispatch Meilisearch sync for %s", locked_listing.id)
+
     return locked_listing
 
 

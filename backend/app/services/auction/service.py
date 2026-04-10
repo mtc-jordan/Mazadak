@@ -325,6 +325,14 @@ async def handle_auction_expiry(
     except Exception:
         logger.warning("Failed to queue notifications for auction=%s", auction_id)
 
+    # Sync listing to Meilisearch (status changed to ended)
+    if listing:
+        try:
+            from app.tasks.listing import sync_listing_to_meilisearch
+            sync_listing_to_meilisearch.delay(str(listing.id), action="index")
+        except Exception:
+            logger.warning("Failed to queue Meilisearch sync for listing=%s", listing.id)
+
     # Queue ATS score update for all participants
     try:
         from app.tasks.ats import update_ats_scores

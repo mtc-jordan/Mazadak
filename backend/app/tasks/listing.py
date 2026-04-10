@@ -221,9 +221,12 @@ def sync_listing_to_meilisearch(self, listing_id: str, action: str = "index") ->
                     "SELECT l.id, l.title_ar, l.title_en, l.description_ar, "
                     "l.description_en, l.category_id, l.condition, l.starting_price, "
                     "l.current_price, l.status, l.seller_id, l.is_charity, "
-                    "l.is_certified, l.bid_count, l.starts_at, l.ends_at, "
-                    "l.location_city, l.location_country, l.watcher_count, l.view_count "
-                    "FROM listings l WHERE l.id = :id"
+                    "l.is_certified, l.bid_count, l.ends_at, l.created_at, "
+                    "l.location_city, l.location_country, "
+                    "u.ats_score AS seller_ats "
+                    "FROM listings l "
+                    "LEFT JOIN users u ON u.id = l.seller_id "
+                    "WHERE l.id = :id"
                 ),
                 {"id": listing_id},
             ).fetchone()
@@ -241,6 +244,9 @@ def sync_listing_to_meilisearch(self, listing_id: str, action: str = "index") ->
                 {"id": listing_id},
             ).fetchone()
 
+            ends_at = row[14]
+            created_at = row[15]
+
             doc = {
                 "id": row[0],
                 "title_ar": row[1],
@@ -250,18 +256,17 @@ def sync_listing_to_meilisearch(self, listing_id: str, action: str = "index") ->
                 "category_id": row[5],
                 "condition": row[6],
                 "starting_price": row[7],
-                "current_price": row[8],
+                "current_price": row[8] or row[7],
                 "status": row[9],
                 "seller_id": row[10],
+                "seller_ats": row[18] or 0,
                 "is_charity": bool(row[11]),
                 "is_certified": bool(row[12]),
                 "bid_count": row[13] or 0,
-                "starts_at": str(row[14]) if row[14] else None,
-                "ends_at": str(row[15]) if row[15] else None,
+                "ends_at_timestamp": int(ends_at.timestamp()) if ends_at else None,
+                "created_at_timestamp": int(created_at.timestamp()) if created_at else None,
                 "location_city": row[16],
                 "location_country": row[17],
-                "watcher_count": row[18] or 0,
-                "view_count": row[19] or 0,
                 "image_url": img_row[0] if img_row and img_row[0] else "",
             }
 

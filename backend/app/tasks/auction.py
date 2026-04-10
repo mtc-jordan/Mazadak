@@ -110,12 +110,21 @@ async def _run_insert_bid(auction_id: str, user_id: str, amount: int, currency: 
             auction.current_price = amount
             auction.bid_count = (auction.bid_count or 0) + 1
 
-            # Update listing current_price
+            # Update listing current_price + bid_count
             listing = await db.get(Listing, auction.listing_id)
             if listing:
                 listing.current_price = amount
+                listing.bid_count = auction.bid_count
 
             await db.commit()
+
+            # Sync to Meilisearch (price + bid_count changed)
+            if listing:
+                try:
+                    from app.tasks.listing import sync_listing_to_meilisearch
+                    sync_listing_to_meilisearch.delay(str(listing.id), action="index")
+                except Exception:
+                    pass
 
         return bid
 
