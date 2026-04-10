@@ -7,6 +7,7 @@ RUN npm ci
 COPY . .
 
 FROM base AS development
+EXPOSE 3000
 CMD ["npm", "run", "dev"]
 
 FROM base AS builder

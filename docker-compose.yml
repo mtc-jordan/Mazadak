@@ -1,0 +1,258 @@
+# ═══════════════════════════════════════════════════════════════════
+#  MZADAK — Full Local Development Stack
+#
+#  Usage:
+#    docker compose up -d                  # start everything
+#    docker compose up api ai-service -d   # API + AI only (+ infra deps)
+#    docker compose logs -f api            # tail API logs
+#    docker compose exec api alembic upgrade head   # run migrations
+#    docker compose exec api python -m app.db.seed  # seed dev data
+#    docker compose down -v                # nuke everything (including data)
+#
+#  Ports:
+#    8000  — Backend API (FastAPI)
+#    8001  — AI Service (FastAPI + CLIP)
+#    3000  — Web Admin (Next.js)
+#    5432  — PostgreSQL
+#    6379  — Redis
+#    7700  — Meilisearch
+#    8123  — ClickHouse HTTP
+#    5555  — Flower (Celery monitor)
+# ═══════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mzadak
+      POSTGRES_USER: mzadak
+      POSTGRES_PASSWORD: mzadak
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mzadak -d mzadak"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    # appendonly = durable writes
+    # notify-keyspace-events Ex = expired key notifications (auction TTL)
+    command: redis-server --appendonly yes --notify-keyspace-events Ex
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.7
+    environment:
+      MEILI_MASTER_KEY: mzadak_dev_key
+      MEILI_ENV: development
+      MEILI_NO_ANALYTICS: "true"
+    ports:
+      - "7700:7700"
+    volumes:
+      - meili_data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    environment:
+      CLICKHOUSE_DB: mzadak_analytics
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Backend API (FastAPI) ───────────────────────────────────────
+
+  api:
+    build:
+      context: ./backend
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    env_file: ./backend/.env
+    environment:
+      # Override hosts to use Docker service names
+      DATABASE_URL: postgresql+asyncpg://mzadak:mzadak@postgres:5432/mzadak
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      MEILISEARCH_URL: http://meilisearch:7700
+      MEILISEARCH_API_KEY: mzadak_dev_key
+      CLICKHOUSE_HOST: clickhouse
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # ── Celery Worker ───────────────────────────────────────────────
+
+  celery-worker:
+    build:
+      context: ./backend
+    command: >
+      celery -A app.core.celery:celery_app worker
+      --loglevel=info
+      --concurrency=2
+      -Q default,bids,notifications,escrow
+    volumes:
+      - ./backend:/app
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://mzadak:mzadak@postgres:5432/mzadak
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      MEILISEARCH_URL: http://meilisearch:7700
+      MEILISEARCH_API_KEY: mzadak_dev_key
+      CLICKHOUSE_HOST: clickhouse
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Celery Beat (periodic scheduler) ────────────────────────────
+
+  celery-beat:
+    build:
+      context: ./backend
+    command: >
+      celery -A app.core.celery:celery_app beat
+      --loglevel=info
+    volumes:
+      - ./backend:/app
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://mzadak:mzadak@postgres:5432/mzadak
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Flower (Celery monitoring UI) ───────────────────────────────
+
+  flower:
+    build:
+      context: ./backend
+    command: >
+      celery -A app.core.celery:celery_app flower
+      --port=5555
+      --broker_api=redis://redis:6379/1
+    ports:
+      - "5555:5555"
+    env_file: ./backend/.env
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/1
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── AI Service (FastAPI + CLIP/GPT-4o) ──────────────────────────
+
+  ai-service:
+    build:
+      context: ./ai-service
+      target: development
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./ai-service:/app
+      - ai_model_cache:/app/model_cache
+    env_file: ./ai-service/.env
+    environment:
+      REDIS_URL: redis://redis:6379/1
+      BACKEND_URL: http://api:8000
+      GPU_ENABLED: "false"
+      MODEL_CACHE_DIR: /app/model_cache
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  # ── Web Admin (Next.js) ─────────────────────────────────────────
+
+  web:
+    build:
+      context: ./web
+      target: development
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./web:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+      NEXT_PUBLIC_WS_URL: ws://localhost:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  meili_data:
+  clickhouse_data:
+  ai_model_cache:
