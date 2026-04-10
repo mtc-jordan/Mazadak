@@ -1,6 +1,7 @@
 FROM python:3.12-slim AS base
 
 WORKDIR /app
+ENV PYTHONPATH=/app
 
 # System deps for asyncpg, Pillow, imagehash, and healthcheck curl
 RUN apt-get update && apt-get install -y --no-install-recommends \

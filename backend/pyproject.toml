@@ -53,9 +53,6 @@ dependencies = [
     "twilio>=9.3.0",                # SMS / WhatsApp
     "aiosmtplib>=2.0.0",            # async SMTP for email
 
-    # --- Shipping ---
-    "aramex-sdk>=1.0.0",
-
     # --- Phone validation ---
     "phonenumbers>=8.13.0",
 
@@ -72,6 +69,8 @@ dependencies = [
     "pillow>=11.0.0",
     "python-dateutil>=2.9.0",
     "imagehash>=4.3.0",             # perceptual hashing for duplicate detection
+    "jinja2>=3.1.0",                # notification template rendering
+    "flower>=2.0.0",                # Celery monitoring dashboard
 ]
 
 [project.optional-dependencies]

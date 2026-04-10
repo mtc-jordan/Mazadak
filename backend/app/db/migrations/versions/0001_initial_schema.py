@@ -110,7 +110,7 @@ def upgrade() -> None:
         sa.Column("whatsapp_linked", sa.Boolean, server_default="false", nullable=False),
         sa.Column("whatsapp_linked_at", sa.DateTime(timezone=True), nullable=True),
         # -- FCM push tokens (JSON array) -----------------------------
-        sa.Column("fcm_tokens", JSONB, server_default="'[]'", nullable=True),
+        sa.Column("fcm_tokens", JSONB, server_default="[]", nullable=True),
         # -- Preferences & tracking -----------------------------------
         sa.Column("preferred_language", sa.String(5), server_default="ar", nullable=False),
         sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True),
@@ -188,7 +188,7 @@ def upgrade() -> None:
         sa.Column("ai_category_confidence", sa.Numeric(5, 2), nullable=True),
         sa.Column("moderation_score", sa.Numeric(5, 2), nullable=True),
         sa.Column("moderation_status", sa.String(50), server_default="pending", nullable=False),
-        sa.Column("moderation_flags", JSONB, server_default="'[]'", nullable=False),
+        sa.Column("moderation_flags", JSONB, server_default="[]", nullable=False),
         sa.Column("phash", sa.String(64), nullable=True),
         sa.Column("view_count", sa.Integer, server_default="0", nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
@@ -371,10 +371,10 @@ def upgrade() -> None:
         sa.Column("title_ar", sa.String(200), nullable=True),
         sa.Column("body_en", sa.Text, nullable=True),
         sa.Column("body_ar", sa.Text, nullable=True),
-        sa.Column("data", JSONB, server_default="'{}'", nullable=False),
+        sa.Column("data", JSONB, server_default="{}", nullable=False),
         sa.Column("is_read", sa.Boolean, server_default="false", nullable=False),
         sa.Column("read_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("channels_sent", JSONB, server_default="'[]'", nullable=False),
+        sa.Column("channels_sent", JSONB, server_default="[]", nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
     )
     op.create_index("ix_notifications_user_read_created", "notifications", ["user_id", "is_read", sa.text("created_at DESC")])
@@ -419,7 +419,7 @@ def upgrade() -> None:
         sa.Column("client_name_ar", sa.String(300), nullable=True),
         sa.Column("tender_reference", sa.String(200), nullable=False, unique=True),
         sa.Column("description", sa.Text, nullable=True),
-        sa.Column("documents", JSONB, server_default="'[]'", nullable=False),
+        sa.Column("documents", JSONB, server_default="[]", nullable=False),
         sa.Column("status", sa.String(50), server_default="open", nullable=False),
         sa.Column("submission_deadline", sa.DateTime(timezone=True), nullable=False),
         sa.Column("results_announced_at", sa.DateTime(timezone=True), nullable=True),
@@ -436,7 +436,7 @@ def upgrade() -> None:
         sa.Column("amount", sa.Integer, nullable=False),
         sa.Column("notes", sa.Text, nullable=True),
         sa.Column("validity_days", sa.Integer, nullable=False),
-        sa.Column("attachments", JSONB, server_default="'[]'", nullable=False),
+        sa.Column("attachments", JSONB, server_default="[]", nullable=False),
         sa.Column("is_winner", sa.Boolean, server_default="false", nullable=False),
         sa.Column("submitted_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.CheckConstraint("amount > 0", name="ck_b2b_bids_amount_positive"),
