@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.escrow.fsm import (
     InvalidTransitionError,
-    NoWaitLockError,
+    EscrowLockError,
     transition_escrow,
 )
 from app.services.escrow.models import (
@@ -81,15 +81,15 @@ async def _check_payment_deadlines(
 
         try:
             await transition_escrow(
-                escrow.id, "cancelled", None, ActorType.SYSTEM,
+                escrow.id, "cancelled", None, ActorType.SYSTEM.value,
                 "system.payment_deadline_expired",
-                meta={"deadline": escrow.payment_deadline},
-                db=db,
+                {"deadline": escrow.payment_deadline},
+                db,
             )
             _void_payment_intent(escrow)
             results["payment_expired"] += 1
             logger.info("Payment deadline expired → CANCELLED: %s", escrow.id)
-        except (InvalidTransitionError, NoWaitLockError) as exc:
+        except (InvalidTransitionError, EscrowLockError) as exc:
             logger.debug("Skipping escrow %s: %s", escrow.id, exc)
 
 
@@ -106,13 +106,13 @@ async def _check_shipping_deadlines(
 
         try:
             await transition_escrow(
-                escrow.id, "disputed", None, ActorType.SYSTEM,
+                escrow.id, "disputed", None, ActorType.SYSTEM.value,
                 "system.seller_no_show_48h",
-                meta={
+                {
                     "deadline": escrow.shipping_deadline,
                     "seller_id": escrow.seller_id,
                 },
-                db=db,
+                db,
             )
             await _increment_seller_strike(db, escrow.seller_id)
             results["shipping_expired"] += 1
@@ -120,7 +120,7 @@ async def _check_shipping_deadlines(
                 "Shipping deadline expired → DISPUTED: %s (seller %s striked)",
                 escrow.id, escrow.seller_id,
             )
-        except (InvalidTransitionError, NoWaitLockError) as exc:
+        except (InvalidTransitionError, EscrowLockError) as exc:
             logger.debug("Skipping escrow %s: %s", escrow.id, exc)
 
 
@@ -137,14 +137,14 @@ async def _check_inspection_deadlines(
 
         try:
             await transition_escrow(
-                escrow.id, "released", None, ActorType.SYSTEM,
+                escrow.id, "released", None, ActorType.SYSTEM.value,
                 "system.inspection_auto_release",
-                meta={"deadline": escrow.inspection_deadline},
-                db=db,
+                {"deadline": escrow.inspection_deadline},
+                db,
             )
             results["inspection_expired"] += 1
             logger.info("Inspection deadline expired → RELEASED: %s", escrow.id)
-        except (InvalidTransitionError, NoWaitLockError) as exc:
+        except (InvalidTransitionError, EscrowLockError) as exc:
             logger.debug("Skipping escrow %s: %s", escrow.id, exc)
 
 
@@ -167,19 +167,19 @@ async def _check_mediator_sla(
                 continue
             try:
                 escrow_obj = await transition_escrow(
-                    escrow.id, "partially_released", None, ActorType.SYSTEM,
+                    escrow.id, "resolved_split", None, ActorType.SYSTEM.value,
                     "system.mediator_sla_144h_auto_execute",
-                    meta={
+                    {
                         "elapsed_hours": elapsed.total_seconds() / 3600,
                         "split": {"seller_pct": 50, "buyer_pct": 50},
                     },
-                    db=db,
+                    db,
                 )
                 escrow_obj.seller_amount = float(escrow.amount) * 0.5
                 await db.commit()
                 results["mediator_auto_executed"] += 1
-                logger.info("Mediator SLA 144h → PARTIALLY_RELEASED: %s", escrow.id)
-            except (InvalidTransitionError, NoWaitLockError) as exc:
+                logger.info("Mediator SLA 144h → RESOLVED_SPLIT: %s", escrow.id)
+            except (InvalidTransitionError, EscrowLockError) as exc:
                 logger.debug("Skipping escrow %s: %s", escrow.id, exc)
             continue
 

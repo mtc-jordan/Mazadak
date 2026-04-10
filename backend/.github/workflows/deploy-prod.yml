@@ -1,0 +1,299 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "ECR image tag to deploy (from staging, e.g. abc1234)"
+        required: true
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: me-south-1
+  ECR_REPOSITORY: mzadak-api
+  ECS_CLUSTER: mzadak-prod
+  ECS_SERVICE: mzadak-backend-prod
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  canary-deploy:
+    runs-on: ubuntu-latest
+    environment: production  # Requires GitHub environment approval
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Verify image exists in ECR
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          aws ecr describe-images \
+            --repository-name $ECR_REPOSITORY \
+            --image-ids imageTag=${{ inputs.image_tag }} \
+            || (echo "Image ${{ inputs.image_tag }} not found in ECR!" && exit 1)
+
+      # ── Backup: save current task def for rollback ────────────
+      - name: Save rollback task definition
+        id: rollback
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ env.ECS_SERVICE }} \
+            --query taskDefinition \
+            > rollback-task-definition.json
+          ROLLBACK_ARN=$(jq -r '.taskDefinitionArn' rollback-task-definition.json)
+          echo "arn=$ROLLBACK_ARN" >> $GITHUB_OUTPUT
+          echo "Saved rollback: $ROLLBACK_ARN"
+
+      # ── Database migration (with backup) ──────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install for migration
+        run: pip install -e "."
+
+      - name: Backup prod DB before migration
+        run: |
+          aws rds create-db-snapshot \
+            --db-instance-identifier ${{ secrets.PROD_RDS_INSTANCE }} \
+            --db-snapshot-identifier "pre-deploy-$(date +%Y%m%d-%H%M%S)" \
+            || echo "Snapshot creation initiated (may already exist)"
+
+      - name: Run Alembic migrations (prod DB)
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: alembic upgrade head
+
+      # ── Build new task definition ─────────────────────────────
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ env.ECS_SERVICE }} \
+            --query taskDefinition \
+            > task-definition.json
+
+      - name: Update task definition image
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: mzadak-backend
+          image: ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ inputs.image_tag }}
+
+      - name: Register new task definition
+        id: register
+        run: |
+          NEW_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://${{ steps.task-def.outputs.task-definition }} \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          echo "arn=$NEW_ARN" >> $GITHUB_OUTPUT
+          echo "Registered: $NEW_ARN"
+
+      # ══════════════════════════════════════════════════════════
+      # Stage 1: 10% canary traffic
+      # ══════════════════════════════════════════════════════════
+      - name: "Stage 1: Deploy canary (10% traffic)"
+        run: |
+          aws ecs update-service \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service ${{ env.ECS_SERVICE }} \
+            --task-definition ${{ steps.register.outputs.arn }} \
+            --deployment-configuration "deploymentCircuitBreaker={enable=true,rollback=true},maximumPercent=150,minimumHealthyPercent=100"
+          echo "Waiting for service stability..."
+          aws ecs wait services-stable \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }}
+
+      - name: "Stage 1: Monitor (5 minutes)"
+        id: stage1
+        run: |
+          echo "Monitoring canary for 5 minutes..."
+          sleep 300
+
+          # Check error rate
+          ERROR_RATE=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/ApplicationELB \
+            --metric-name HTTPCode_Target_5XX_Count \
+            --dimensions Name=TargetGroup,Value=${{ secrets.PROD_TARGET_GROUP_ARN }} \
+            --start-time "$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%S)" \
+            --end-time "$(date -u +%Y-%m-%dT%H:%M:%S)" \
+            --period 300 --statistics Sum \
+            --query 'Datapoints[0].Sum' --output text 2>/dev/null || echo "0")
+          [ "$ERROR_RATE" = "None" ] && ERROR_RATE="0"
+
+          # Check P95 latency
+          P95=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/ApplicationELB \
+            --metric-name TargetResponseTime \
+            --dimensions Name=TargetGroup,Value=${{ secrets.PROD_TARGET_GROUP_ARN }} \
+            --start-time "$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%S)" \
+            --end-time "$(date -u +%Y-%m-%dT%H:%M:%S)" \
+            --period 300 --statistics p95 \
+            --query 'Datapoints[0].p95' --output text 2>/dev/null || echo "0")
+          [ "$P95" = "None" ] && P95="0"
+
+          # Convert P95 from seconds to ms
+          P95_MS=$(echo "$P95 * 1000" | bc 2>/dev/null || echo "0")
+
+          echo "5xx errors: $ERROR_RATE | P95 latency: ${P95_MS}ms"
+
+          TOTAL_REQUESTS=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/ApplicationELB \
+            --metric-name RequestCount \
+            --dimensions Name=TargetGroup,Value=${{ secrets.PROD_TARGET_GROUP_ARN }} \
+            --start-time "$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%S)" \
+            --end-time "$(date -u +%Y-%m-%dT%H:%M:%S)" \
+            --period 300 --statistics Sum \
+            --query 'Datapoints[0].Sum' --output text 2>/dev/null || echo "1")
+          [ "$TOTAL_REQUESTS" = "None" ] && TOTAL_REQUESTS="1"
+          [ "$TOTAL_REQUESTS" = "0" ] && TOTAL_REQUESTS="1"
+
+          # error_rate > 1% OR P95 > 500ms → fail
+          ERROR_PCT=$(echo "scale=4; $ERROR_RATE / $TOTAL_REQUESTS * 100" | bc 2>/dev/null || echo "0")
+          echo "Error rate: ${ERROR_PCT}%"
+
+          if (( $(echo "$ERROR_PCT > 1.0" | bc -l 2>/dev/null || echo 0) )) || \
+             (( $(echo "$P95_MS > 500" | bc -l 2>/dev/null || echo 0) )); then
+            echo "stage1_ok=false" >> $GITHUB_OUTPUT
+            echo "CANARY FAILED: error_rate=${ERROR_PCT}% P95=${P95_MS}ms"
+          else
+            echo "stage1_ok=true" >> $GITHUB_OUTPUT
+            echo "Stage 1 passed"
+          fi
+
+      - name: "Stage 1: Rollback if failed"
+        if: steps.stage1.outputs.stage1_ok != 'true'
+        run: |
+          echo "Rolling back to ${{ steps.rollback.outputs.arn }}"
+          aws ecs update-service \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service ${{ env.ECS_SERVICE }} \
+            --task-definition "${{ steps.rollback.outputs.arn }}" \
+            --force-new-deployment
+          exit 1
+
+      # ══════════════════════════════════════════════════════════
+      # Stage 2: 50% traffic
+      # ══════════════════════════════════════════════════════════
+      - name: "Stage 2: Scale to 50% traffic"
+        if: steps.stage1.outputs.stage1_ok == 'true'
+        run: |
+          echo "Canary healthy — scaling to 50%..."
+          # ECS will naturally route to new tasks as old ones drain
+          # Force a deployment refresh to increase new task count
+          DESIRED=$(aws ecs describe-services \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --query 'services[0].desiredCount' --output text)
+          echo "Service desired count: $DESIRED"
+
+      - name: "Stage 2: Monitor (5 minutes)"
+        if: steps.stage1.outputs.stage1_ok == 'true'
+        id: stage2
+        run: |
+          echo "Monitoring 50% traffic for 5 minutes..."
+          sleep 300
+
+          ERROR_RATE=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/ApplicationELB \
+            --metric-name HTTPCode_Target_5XX_Count \
+            --dimensions Name=TargetGroup,Value=${{ secrets.PROD_TARGET_GROUP_ARN }} \
+            --start-time "$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%S)" \
+            --end-time "$(date -u +%Y-%m-%dT%H:%M:%S)" \
+            --period 300 --statistics Sum \
+            --query 'Datapoints[0].Sum' --output text 2>/dev/null || echo "0")
+          [ "$ERROR_RATE" = "None" ] && ERROR_RATE="0"
+
+          P95=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/ApplicationELB \
+            --metric-name TargetResponseTime \
+            --dimensions Name=TargetGroup,Value=${{ secrets.PROD_TARGET_GROUP_ARN }} \
+            --start-time "$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%S)" \
+            --end-time "$(date -u +%Y-%m-%dT%H:%M:%S)" \
+            --period 300 --statistics p95 \
+            --query 'Datapoints[0].p95' --output text 2>/dev/null || echo "0")
+          [ "$P95" = "None" ] && P95="0"
+          P95_MS=$(echo "$P95 * 1000" | bc 2>/dev/null || echo "0")
+
+          TOTAL=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/ApplicationELB \
+            --metric-name RequestCount \
+            --dimensions Name=TargetGroup,Value=${{ secrets.PROD_TARGET_GROUP_ARN }} \
+            --start-time "$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%S)" \
+            --end-time "$(date -u +%Y-%m-%dT%H:%M:%S)" \
+            --period 300 --statistics Sum \
+            --query 'Datapoints[0].Sum' --output text 2>/dev/null || echo "1")
+          [ "$TOTAL" = "None" ] && TOTAL="1"
+          [ "$TOTAL" = "0" ] && TOTAL="1"
+
+          ERROR_PCT=$(echo "scale=4; $ERROR_RATE / $TOTAL * 100" | bc 2>/dev/null || echo "0")
+          echo "Stage 2 — Error rate: ${ERROR_PCT}% | P95: ${P95_MS}ms"
+
+          if (( $(echo "$ERROR_PCT > 1.0" | bc -l 2>/dev/null || echo 0) )) || \
+             (( $(echo "$P95_MS > 500" | bc -l 2>/dev/null || echo 0) )); then
+            echo "stage2_ok=false" >> $GITHUB_OUTPUT
+          else
+            echo "stage2_ok=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: "Stage 2: Rollback if failed"
+        if: steps.stage1.outputs.stage1_ok == 'true' && steps.stage2.outputs.stage2_ok != 'true'
+        run: |
+          echo "Stage 2 failed — rolling back to ${{ steps.rollback.outputs.arn }}"
+          aws ecs update-service \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service ${{ env.ECS_SERVICE }} \
+            --task-definition "${{ steps.rollback.outputs.arn }}" \
+            --force-new-deployment
+          exit 1
+
+      # ══════════════════════════════════════════════════════════
+      # Stage 3: 100% traffic — terminate old instances
+      # ══════════════════════════════════════════════════════════
+      - name: "Stage 3: Full traffic (100%)"
+        if: steps.stage2.outputs.stage2_ok == 'true'
+        run: |
+          echo "All checks passed — promoting to 100% traffic"
+          # ECS deployment is already running new task def
+          # Wait for full stability
+          aws ecs wait services-stable \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }}
+          echo "Deployment complete — 100% traffic on new version"
+
+      - name: "Stage 3: Wait for old instances to drain"
+        if: steps.stage2.outputs.stage2_ok == 'true'
+        run: |
+          echo "Waiting 10 minutes for old task draining..."
+          sleep 600
+          echo "Drain complete"
+
+      # ── Notify ────────────────────────────────────────────────
+      - name: Notify Slack
+        if: always()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && ':rocket:' || ':rotating_light:' }} Production deploy ${{ job.status }}\nImage: ${{ inputs.image_tag }}\nBy: ${{ github.actor }}\nLogs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

@@ -17,12 +17,16 @@ class AuctionTimer extends StatefulWidget {
   const AuctionTimer({
     super.key,
     required this.endsAt,
+    this.timerRemaining,
     this.timerExtended = false,
     this.onExpired,
   });
 
   /// ISO 8601 end time string from server.
   final String? endsAt;
+
+  /// Server-provided TTL in seconds — preferred over endsAt to avoid clock drift.
+  final int? timerRemaining;
 
   /// Whether the timer was recently extended (anti-snipe).
   final bool timerExtended;
@@ -47,6 +51,10 @@ class _AuctionTimerState extends State<AuctionTimer>
   // Extended banner animation
   late AnimationController _bannerController;
   late Animation<Offset> _bannerSlide;
+
+  // Timer digit amber flash 3× on extension
+  late AnimationController _flashController;
+  late Animation<Color?> _digitFlash;
 
   @override
   void initState() {
@@ -82,7 +90,46 @@ class _AuctionTimerState extends State<AuctionTimer>
       curve: const Cubic(0, 0.8, 0.3, 1),
     ));
 
-    _computeRemaining();
+    // Flash 3× amber on timer extension
+    _flashController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900), // 3 × 300ms
+    );
+    _digitFlash = TweenSequence<Color?>([
+      // Flash 1
+      TweenSequenceItem(
+        tween: ColorTween(begin: AppColors.navy, end: const Color(0xFFFBB040)),
+        weight: 1,
+      ),
+      TweenSequenceItem(
+        tween: ColorTween(begin: const Color(0xFFFBB040), end: AppColors.navy),
+        weight: 1,
+      ),
+      // Flash 2
+      TweenSequenceItem(
+        tween: ColorTween(begin: AppColors.navy, end: const Color(0xFFFBB040)),
+        weight: 1,
+      ),
+      TweenSequenceItem(
+        tween: ColorTween(begin: const Color(0xFFFBB040), end: AppColors.navy),
+        weight: 1,
+      ),
+      // Flash 3
+      TweenSequenceItem(
+        tween: ColorTween(begin: AppColors.navy, end: const Color(0xFFFBB040)),
+        weight: 1,
+      ),
+      TweenSequenceItem(
+        tween: ColorTween(begin: const Color(0xFFFBB040), end: AppColors.navy),
+        weight: 1,
+      ),
+    ]).animate(_flashController);
+
+    if (widget.timerRemaining != null) {
+      _syncFromServer(widget.timerRemaining!);
+    } else {
+      _computeRemaining();
+    }
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
   }
 
@@ -90,22 +137,48 @@ class _AuctionTimerState extends State<AuctionTimer>
   void didUpdateWidget(AuctionTimer old) {
     super.didUpdateWidget(old);
 
-    // Server correction: recompute when endsAt changes
-    if (old.endsAt != widget.endsAt) {
+    // Server TTL correction: re-sync when timerRemaining changes
+    if (widget.timerRemaining != null &&
+        widget.timerRemaining != old.timerRemaining) {
       _expired = false;
+      _syncFromServer(widget.timerRemaining!);
+    } else if (old.endsAt != widget.endsAt) {
+      // Fallback: recompute when endsAt changes
+      _expired = false;
+      _serverSyncedAt = null;
+      _serverTtl = null;
       _computeRemaining();
     }
 
-    // Timer extended banner
+    // Timer extended banner + amber digit flash
     if (widget.timerExtended && !old.timerExtended) {
       _bannerController.forward(from: 0);
-    }
-    if (!widget.timerExtended && old.timerExtended) {
-      _bannerController.reverse();
+      _flashController.forward(from: 0);
+      Future.delayed(const Duration(seconds: 5), () {
+        if (mounted) _bannerController.reverse();
+      });
     }
   }
 
+  /// Server-corrected epoch: set when timerRemaining arrives from server.
+  DateTime? _serverSyncedAt;
+  int? _serverTtl;
+
+  void _syncFromServer(int ttl) {
+    _serverTtl = ttl;
+    _serverSyncedAt = DateTime.now();
+    _remaining = Duration(seconds: ttl);
+  }
+
   void _computeRemaining() {
+    // Prefer server-provided TTL (avoids client ↔ server clock drift)
+    if (_serverSyncedAt != null && _serverTtl != null) {
+      final elapsed = DateTime.now().difference(_serverSyncedAt!);
+      final left = Duration(seconds: _serverTtl!) - elapsed;
+      _remaining = left.isNegative ? Duration.zero : left;
+      return;
+    }
+    // Fallback: compute from endsAt
     if (widget.endsAt == null) {
       _remaining = Duration.zero;
       return;
@@ -151,6 +224,7 @@ class _AuctionTimerState extends State<AuctionTimer>
     _ticker?.cancel();
     _pulseController.dispose();
     _bannerController.dispose();
+    _flashController.dispose();
     super.dispose();
   }
 
@@ -192,33 +266,42 @@ class _AuctionTimerState extends State<AuctionTimer>
         // ── Timer display ───────────────────────────────────────
         ScaleTransition(
           scale: _pulseAnimation,
-          child: Container(
-            padding: const EdgeInsetsDirectional.symmetric(
-              horizontal: AppSpacing.lg,
-              vertical: AppSpacing.sm,
-            ),
-            decoration: BoxDecoration(
-              color: _timerColor.withOpacity(0.1),
-              borderRadius: AppSpacing.radiusMd,
-              border: Border.all(color: _timerColor.withOpacity(0.3)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.timer_outlined, color: _timerColor, size: 20),
-                const SizedBox(width: AppSpacing.xs),
-                Text(
-                  _formattedTime,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w700,
-                    color: _timerColor,
-                    fontFamily: 'Sora',
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
+          child: AnimatedBuilder(
+            animation: _digitFlash,
+            builder: (_, child) {
+              // Use flash color during extension animation, else normal
+              final textColor = _flashController.isAnimating
+                  ? _digitFlash.value ?? _timerColor
+                  : _timerColor;
+              return Container(
+                padding: const EdgeInsetsDirectional.symmetric(
+                  horizontal: AppSpacing.lg,
+                  vertical: AppSpacing.sm,
                 ),
-              ],
-            ),
+                decoration: BoxDecoration(
+                  color: _timerColor.withValues(alpha: 0.1),
+                  borderRadius: AppSpacing.radiusMd,
+                  border: Border.all(color: _timerColor.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.timer_outlined, color: textColor, size: 20),
+                    const SizedBox(width: AppSpacing.xs),
+                    Text(
+                      _formattedTime,
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                        color: textColor,
+                        fontFamily: 'Sora',
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
         ),
       ],
@@ -240,7 +323,7 @@ class _AuctionTimerState extends State<AuctionTimer>
           Icon(Icons.update, size: 18, color: AppColors.gold),
           SizedBox(width: AppSpacing.xs),
           Text(
-            'Extended!',
+            'تم تمديد الوقت!',
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w600,

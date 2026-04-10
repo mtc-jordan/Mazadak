@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.escrow.fsm import (  # noqa: F401 — re-export
     InvalidTransitionError,
-    NoWaitLockError,
+    EscrowLockError,
     transition_escrow,
 )
 from app.services.escrow.models import Escrow, EscrowState
@@ -42,7 +42,7 @@ async def create_escrow(
         seller_id=seller_id,
         amount=amount,
         currency=currency,
-        state=EscrowState.INITIATED,
+        state=EscrowState.PAYMENT_PENDING,
     )
     db.add(escrow)
     await db.commit()

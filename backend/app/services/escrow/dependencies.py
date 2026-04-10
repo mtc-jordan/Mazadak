@@ -4,6 +4,7 @@ from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.types import UUIDPath
 from app.services.auth.dependencies import get_current_user
 from app.services.auth.models import User
 from app.services.escrow.models import Escrow
@@ -11,7 +12,7 @@ from app.services.escrow.service import get_escrow
 
 
 async def get_escrow_or_404(
-    escrow_id: str,
+    escrow_id: UUIDPath,
     db: AsyncSession = Depends(get_db),
 ) -> Escrow:
     escrow = await get_escrow(escrow_id, db)

@@ -336,7 +336,7 @@ class TestPaymentDeclined:
 
     @pytest.mark.asyncio
     async def test_declined_first_failure(self, escrow_db):
-        """First decline → payment_failed, retry_count=1."""
+        """First decline → stays payment_pending, retry_count=1."""
         webhook, _ = _get_webhook_module()
         row = await _insert_escrow(escrow_db, state="payment_pending")
         payload = _declined_payload(row["id"])
@@ -344,16 +344,16 @@ class TestPaymentDeclined:
         result = await webhook.handle_webhook("payment_declined", payload["data"], escrow_db)
 
         assert result["status"] == "processed"
-        assert result["state"] == "payment_failed"
+        assert result["state"] == "payment_pending"
         assert result["retry_count"] == 1
 
         escrow = await escrow_db.get(Escrow, row["id"])
-        assert escrow.state == "payment_failed"
+        assert escrow.state == "payment_pending"
         assert escrow.retry_count == 1
 
     @pytest.mark.asyncio
     async def test_declined_second_failure(self, escrow_db):
-        """Second decline after retry → retry_count=2, still payment_failed."""
+        """Second decline after retry → retry_count=2, still payment_pending."""
         webhook, _ = _get_webhook_module()
         row = await _insert_escrow(escrow_db, state="payment_pending", retry_count=1)
         payload = _declined_payload(row["id"])
@@ -361,11 +361,11 @@ class TestPaymentDeclined:
         result = await webhook.handle_webhook("payment_declined", payload["data"], escrow_db)
 
         assert result["retry_count"] == 2
-        assert result["state"] == "payment_failed"
+        assert result["state"] == "payment_pending"
 
     @pytest.mark.asyncio
     async def test_declined_third_failure_cancels(self, escrow_db):
-        """Third decline → cancelled + second bidder notified."""
+        """Third decline (>= MAX_PAYMENT_RETRIES) → cancelled + second bidder notified."""
         webhook, _ = _get_webhook_module()
         row = await _insert_escrow(escrow_db, state="payment_pending", retry_count=2)
         payload = _declined_payload(row["id"])
@@ -390,18 +390,17 @@ class TestPaymentDeclined:
         mock_tasks.notify_second_bidder.delay.assert_called_once_with(row["auction_id"])
 
     @pytest.mark.asyncio
-    async def test_declined_creates_event_log(self, escrow_db):
+    async def test_declined_no_event_before_max_retries(self, escrow_db):
+        """First/second decline stays in payment_pending — no FSM transition event."""
         webhook, _ = _get_webhook_module()
         row = await _insert_escrow(escrow_db, state="payment_pending")
         payload = _declined_payload(row["id"], reason="Insufficient Funds")
 
         await webhook.handle_webhook("payment_declined", payload["data"], escrow_db)
 
+        # No state transition occurred, so no EscrowEvent rows
         events = await _get_events(escrow_db, row["id"])
-        assert len(events) == 1
-        assert events[0].trigger == "checkout.payment_declined"
-        assert events[0].from_state == "payment_pending"
-        assert events[0].to_state == "payment_failed"
+        assert len(events) == 0
 
     @pytest.mark.asyncio
     async def test_declined_ignored_if_not_payment_pending(self, escrow_db):
@@ -416,19 +415,24 @@ class TestPaymentDeclined:
         assert result["reason"] == "not_payment_pending"
 
     @pytest.mark.asyncio
-    async def test_declined_cancel_creates_two_events(self, escrow_db):
-        """Third decline creates two events: payment_failed + cancelled."""
+    async def test_declined_cancel_creates_one_event(self, escrow_db):
+        """Third decline creates one event: payment_pending → cancelled."""
         webhook, _ = _get_webhook_module()
         row = await _insert_escrow(escrow_db, state="payment_pending", retry_count=2)
         payload = _declined_payload(row["id"])
 
-        await webhook.handle_webhook("payment_declined", payload["data"], escrow_db)
+        mock_tasks = MagicMock()
+        with patch.dict("sys.modules", {
+            "app.tasks.escrow": mock_tasks,
+            "app.core.celery": MagicMock(),
+        }):
+            await webhook.handle_webhook("payment_declined", payload["data"], escrow_db)
 
         events = await _get_events(escrow_db, row["id"])
-        assert len(events) == 2
-        assert events[0].to_state == "payment_failed"
-        assert events[1].to_state == "cancelled"
-        assert events[1].trigger == "checkout.max_retries_exceeded"
+        assert len(events) == 1
+        assert events[0].from_state == "payment_pending"
+        assert events[0].to_state == "cancelled"
+        assert events[0].trigger == "checkout.max_retries_exceeded"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -446,15 +450,15 @@ class TestPaymentRefunded:
         result = await webhook.handle_webhook("payment_refunded", payload["data"], escrow_db)
 
         assert result["status"] == "processed"
-        assert result["state"] == "refunded"
+        assert result["state"] == "resolved_refunded"
 
         escrow = await escrow_db.get(Escrow, row["id"])
-        assert escrow.state == "refunded"
+        assert escrow.state == "resolved_refunded"
 
     @pytest.mark.asyncio
     async def test_refunded_already_refunded_idempotent(self, escrow_db):
         webhook, _ = _get_webhook_module()
-        row = await _insert_escrow(escrow_db, state="refunded")
+        row = await _insert_escrow(escrow_db, state="resolved_refunded")
         payload = _refunded_payload(row["id"])
 
         result = await webhook.handle_webhook("payment_refunded", payload["data"], escrow_db)

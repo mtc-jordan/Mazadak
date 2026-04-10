@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "MZADAK"
     DEBUG: bool = False
     ENVIRONMENT: str = "development"  # development | staging | production
+    LOG_LEVEL: str = "INFO"
+    SECRET_KEY: str = "change-me-in-production"
 
     # ── API ──────────────────────────────────────────────────────
     API_V1_PREFIX: str = "/api/v1"
@@ -29,10 +31,10 @@ class Settings(BaseSettings):
 
     # ── PostgreSQL (async) ───────────────────────────────────────
     DATABASE_URL: str = (
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/mzadak"
+        "postgresql+asyncpg://mzadak:mzadak@localhost:5432/mzadak"
     )
-    DB_POOL_SIZE: int = 20
-    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
     DB_ECHO: bool = False
 
     # ── Redis ────────────────────────────────────────────────────
@@ -73,6 +75,7 @@ class Settings(BaseSettings):
     LISTING_PHASH_THRESHOLD: int = 92          # ≥ 92% similarity → flag
     LISTING_PRESIGNED_URL_EXPIRY: int = 300    # 5 min upload window
     LISTING_THUMBNAIL_SIZES: list[int] = [100, 400, 800]
+    MAX_LISTING_IMAGES: int = 10
 
     # ── Checkout.com (Payments) ──────────────────────────────────
     CHECKOUT_SECRET_KEY: str = ""
@@ -114,6 +117,9 @@ class Settings(BaseSettings):
     FIREBASE_CREDENTIALS_PATH: str = ""
     WHATSAPP_ACCESS_TOKEN: str = ""
     WHATSAPP_PHONE_NUMBER_ID: str = ""
+    WHATSAPP_APP_SECRET: str = ""               # Meta app secret for HMAC
+    WHATSAPP_WEBHOOK_VERIFY_TOKEN: str = ""     # Custom token for GET verification
+    META_WEBHOOK_SECRET: str = ""               # HMAC secret for bot webhook verification
     WHATSAPP_RATE_LIMIT_PER_DAY: int = 5  # non-critical per user
 
     # ── Rate limits ──────────────────────────────────────────────

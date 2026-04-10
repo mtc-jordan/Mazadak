@@ -7,7 +7,7 @@ Tests for escrow deadline monitoring — FR-ESC-019, PM-08.
   3. INSPECTION_PERIOD past inspection_deadline + 15 min → RELEASED
   4. UNDER_REVIEW 72 h → escalate to admin
   5. UNDER_REVIEW 120 h → propose 50/50 split
-  6. UNDER_REVIEW 144 h → auto-execute 50/50 (PARTIALLY_RELEASED)
+  6. UNDER_REVIEW 144 h → auto-execute 50/50 (RESOLVED_SPLIT)
 
 Time control: tests inject a fixed ``now`` via monkeypatch on
 ``datetime.now`` inside the deadlines module so no real delays occur.
@@ -48,25 +48,29 @@ async def escrow_db():
     event.listen(engine.sync_engine, "connect", _register_sqlite_functions)
 
     # Patch ARRAY/JSONB → Text for SQLite
+    from app.services.auth.models import RefreshToken as _RT
     patch_targets = [
         (Escrow.__table__.c.evidence_s3_keys, None),
         (Escrow.__table__.c.evidence_hashes, None),
         (EscrowEvent.__table__.c.meta, None),
+        (_RT.__table__.c.device_info, None),
     ]
     for i, (col, _) in enumerate(patch_targets):
         patch_targets[i] = (col, col.type)
         col.type = Text()
 
     try:
-        # Also create a minimal users table for seller strike tests
-        from app.services.auth.models import User
+        # Also create User + related tables for seller strike tests
+        from app.services.auth.models import User, UserKycDocument, RefreshToken
         async with engine.begin() as conn:
             await conn.run_sync(
                 Base.metadata.create_all,
                 tables=[
+                    User.__table__,
+                    UserKycDocument.__table__,
+                    RefreshToken.__table__,
                     Escrow.__table__,
                     EscrowEvent.__table__,
-                    User.__table__,
                 ],
             )
     finally:
@@ -104,20 +108,21 @@ async def _insert_escrow(
 
 
 async def _insert_user(db: AsyncSession, user_id: str) -> None:
-    from app.services.auth.models import User, UserRole, KYCStatus, ATSTier
+    from app.services.auth.models import User, UserRole, UserStatus, KYCStatus
 
     user = User(
         id=user_id,
         phone=f"+9627900{uuid4().hex[:5]}",
         full_name_ar="بائع",
-        full_name_en="Seller",
+        full_name="Seller",
         role=UserRole.SELLER,
+        status=UserStatus.ACTIVE,
         kyc_status=KYCStatus.VERIFIED,
         ats_score=500,
-        ats_tier=ATSTier.TRUSTED,
-        country_code="JO",
         preferred_language="ar",
         strike_count=0,
+        fcm_tokens=[],
+        is_pro_seller=False,
     )
     db.add(user)
     await db.commit()
@@ -138,7 +143,7 @@ async def _insert_event(
         from_state=from_state,
         to_state=to_state,
         actor_id=None,
-        actor_type=ActorType.SYSTEM,
+        actor_type=ActorType.SYSTEM.value,
         trigger=trigger,
         meta={},
     )
@@ -546,7 +551,7 @@ class TestMediatorSLA144h:
 
     @pytest.mark.asyncio
     async def test_144h_auto_execute(self, escrow_db):
-        """Under review for 145 h → PARTIALLY_RELEASED + seller_amount set."""
+        """Under review for 145 h → RESOLVED_SPLIT + seller_amount set."""
         dl, _ = _get_deadlines_module()
         entered = T0 - timedelta(hours=145)
         row = await _insert_escrow(escrow_db, "under_review", amount=1000.0)
@@ -562,7 +567,7 @@ class TestMediatorSLA144h:
 
         assert results["mediator_auto_executed"] == 1
         escrow = await escrow_db.get(Escrow, row["id"])
-        assert escrow.state == "partially_released"
+        assert escrow.state == "resolved_split"
         assert float(escrow.seller_amount) == 500.0
 
     @pytest.mark.asyncio
@@ -589,8 +594,8 @@ class TestMediatorSLA144h:
         """Second scan after auto-execute → escrow already terminal, skip."""
         dl, _ = _get_deadlines_module()
         entered = T0 - timedelta(hours=145)
-        # Already executed — state is partially_released (terminal)
-        row = await _insert_escrow(escrow_db, "partially_released")
+        # Already executed — state is resolved_split (terminal)
+        row = await _insert_escrow(escrow_db, "resolved_split")
         await _insert_event(
             escrow_db, row["id"], "disputed", "under_review",
             "mediator.assigned", created_at=entered.isoformat(),
@@ -647,7 +652,7 @@ class TestMultiEscrowScan:
     async def test_unrelated_states_ignored(self, escrow_db):
         """Escrows in non-deadline states are not touched."""
         dl, _ = _get_deadlines_module()
-        await _insert_escrow(escrow_db, "initiated")
+        await _insert_escrow(escrow_db, "payment_pending")
         await _insert_escrow(escrow_db, "funds_held")
         await _insert_escrow(escrow_db, "in_transit")
         await _insert_escrow(escrow_db, "released")

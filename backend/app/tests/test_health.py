@@ -1,6 +1,6 @@
 from httpx import ASGITransport, AsyncClient
 
-from app.main import app
+from app.main import _fastapi_app as app
 
 
 async def test_health_check():

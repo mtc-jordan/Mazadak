@@ -1,7 +1,8 @@
 """
 Alembic environment — async PostgreSQL via asyncpg.
 
-Imports all models so autogenerate can detect them.
+Uses the async engine from app.core.database so pool settings,
+naming conventions, and the DATABASE_URL all come from one place.
 """
 
 import asyncio
@@ -14,13 +15,14 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app.core.config import settings
 from app.core.database import Base
 
-# Import ALL models so Base.metadata knows every table
-from app.services.auth.models import User, KYCDocument  # noqa: F401
-from app.services.listing.models import Listing  # noqa: F401
-from app.services.auction.models import Auction, Bid, ProxyBid  # noqa: F401
-from app.services.escrow.models import Escrow, EscrowEvent  # noqa: F401
-from app.services.notification.models import Notification, NotificationPreference  # noqa: F401
-from app.services.ai.models import AIRequest  # noqa: F401
+# -- Import ALL models so Base.metadata sees every table ---------------
+from app.services.auth.models import *        # noqa: F401,F403
+from app.services.listing.models import *     # noqa: F401,F403
+from app.services.auction.models import *     # noqa: F401,F403
+from app.services.escrow.models import *      # noqa: F401,F403
+from app.services.notification.models import *  # noqa: F401,F403
+from app.services.ai.models import *          # noqa: F401,F403
+from app.services.whatsapp_bot.models import *  # noqa: F401,F403
 
 config = context.config
 
@@ -29,12 +31,12 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# Override sqlalchemy.url from settings (so .env works)
+# Override sqlalchemy.url from settings so .env is the single source
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode — emit SQL to stdout."""
+    """Emit SQL to stdout (no DB connection needed)."""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
@@ -46,14 +48,18 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection):
-    context.configure(connection=connection, target_metadata=target_metadata)
+def do_run_migrations(connection) -> None:
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
 
 async def run_async_migrations() -> None:
-    """Run migrations in 'online' mode with async engine."""
+    """Online mode with async engine — NullPool for short-lived migration."""
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

@@ -37,14 +37,23 @@ celery_app.conf.update(
         "check-escrow-deadlines": {
             "task": "app.tasks.escrow.check_deadlines",
             "schedule": 300.0,  # 5 minutes
+            "options": {"queue": "high"},
         },
         "sync-meilisearch": {
             "task": "app.tasks.search.sync_pending",
             "schedule": 10.0,  # 10 seconds (SDD §4.2 CDC target)
         },
+        "check-stale-auctions": {
+            "task": "app.tasks.auction.check_stale_auctions",
+            "schedule": 300.0,  # 5 minutes — failsafe for missed expirations
+        },
         "retrain-price-oracle": {
             "task": "tasks.retrain_price_model",
-            "schedule": crontab(hour=3, minute=0, day_of_week=0),  # Sunday 3 AM UTC
+            "schedule": crontab(hour=0, minute=0, day_of_week=1),  # Monday 3am Amman (UTC+3) = Monday 00:00 UTC
+        },
+        "weekly-ats-recalculation": {
+            "task": "app.tasks.escrow.recalculate_all_ats",
+            "schedule": crontab(hour=23, minute=0, day_of_week=6),  # Sunday 2am Amman (UTC+3) = Saturday 23:00 UTC
         },
     },
 )

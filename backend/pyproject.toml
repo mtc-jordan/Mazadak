@@ -62,6 +62,9 @@ dependencies = [
     "numpy>=1.26.0",
     "joblib>=1.4.0",
 
+    # --- Logging ---
+    "structlog>=24.4.0",
+
     # --- Utilities ---
     "orjson>=3.10.0",
     "pillow>=11.0.0",
@@ -78,6 +81,8 @@ dev = [
     "httpx>=0.28.0",                # ASGITransport test client
     "factory-boy>=3.3.0",
     "faker>=30.0.0",
+    "fakeredis[aioredis]>=2.25.0",  # in-memory Redis for tests
+    "testcontainers>=4.8.0",        # Docker-based integration tests
     "ruff>=0.8.0",
     "mypy>=1.13.0",
     "pre-commit>=4.0.0",

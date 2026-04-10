@@ -1,21 +1,19 @@
-FROM python:3.12-slim AS base
+FROM python:3.12-slim
 
 WORKDIR /app
 
+# System deps for asyncpg, Pillow, and healthcheck curl
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libpq-dev \
+    build-essential libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Python deps first (layer caching)
 COPY pyproject.toml .
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir "."
 
+# Copy application code
 COPY . .
 
-# ── Development ──────────────────────────────────────────
-FROM base AS development
-RUN pip install --no-cache-dir ".[dev]"
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+EXPOSE 8000
 
-# ── Production ───────────────────────────────────────────
-FROM base AS production
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

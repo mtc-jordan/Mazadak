@@ -2,13 +2,13 @@
 Redis auction state management tests — SDD §3.2.1.
 
 Tests cover:
-- Initialize auction state in Redis
-- Read auction state
+- Initialize auction: sets all Redis keys, idempotency, past ends_at
+- Handle expiry: winner + escrow, reserve not met, no bids
+- Get auction state from Redis
 - Anti-snipe extension logic
 - Bid + anti-snipe integration
-- Auction expiry → PostgreSQL sync + escrow creation
-- Scheduled auction activation (Celery Beat task)
-- Edge cases (max extensions, no bids, already ended)
+- Stale auction failsafe
+- Celery Beat schedule verification
 """
 
 from __future__ import annotations
@@ -20,24 +20,22 @@ from uuid import uuid4
 import pytest
 
 from app.services.auction.models import Auction, AuctionStatus
-
-
-def _has_celery() -> bool:
-    try:
-        import celery  # noqa: F401
-        return True
-    except ImportError:
-        return False
 from app.services.auction.service import (
-    check_anti_snipe,
-    initialize_auction_in_redis,
+    _k,
+    _root,
+    get_auction_state,
+    handle_auction_expiry,
+    initialize_auction,
     place_bid,
-    read_auction_state,
-    end_auction,
 )
 
 
 # ── Helpers ──────────────────────────────────────────────────────
+
+SELLER_ID = str(uuid4())
+BIDDER_ID = str(uuid4())
+_now = datetime.now(timezone.utc)
+
 
 def _make_auction(**overrides) -> Auction:
     """Build an Auction ORM object with sensible defaults."""
@@ -48,8 +46,8 @@ def _make_auction(**overrides) -> Auction:
         status=AuctionStatus.SCHEDULED.value,
         starts_at=now.isoformat(),
         ends_at=(now + timedelta(hours=2)).isoformat(),
-        current_price=100.0,
-        min_increment=25.0,
+        current_price=10000,
+        min_increment=2500,
         bid_count=0,
         extension_count=0,
         winner_id=None,
@@ -58,421 +56,66 @@ def _make_auction(**overrides) -> Auction:
         redis_synced_at=None,
     )
     defaults.update(overrides)
-    auction = Auction(**defaults)
-    return auction
+    return Auction(**defaults)
 
 
-SELLER_ID = str(uuid4())
-BIDDER_ID = str(uuid4())
+def _make_listing(listing_id: str | None = None, **overrides):
+    """Build a Listing ORM object for tests."""
+    from app.services.listing.models import Listing
+
+    defaults = dict(
+        id=listing_id or str(uuid4()),
+        seller_id=SELLER_ID,
+        title_en="Test Listing",
+        title_ar="اختبار",
+        description_ar="وصف",
+        category_id=1,
+        condition="good",
+        starting_price=10000,
+        min_increment=2500,
+        reserve_price=0,
+        status="active",
+        starts_at=_now + timedelta(minutes=10),
+        ends_at=_now + timedelta(hours=25),
+        moderation_flags="[]",
+        moderation_status="pending",
+    )
+    defaults.update(overrides)
+    return Listing(**defaults)
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 1. Initialize auction state in Redis
-# ═══════════════════════════════════════════════════════════════════
-
-class TestInitializeAuction:
-    @pytest.mark.asyncio
-    async def test_initializes_all_fields(self, fake_redis):
-        auction = _make_auction(current_price=500.0, min_increment=50.0)
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=7200)
-
-        key = f"auction:{auction.id}"
-        state = await fake_redis.hgetall(key)
-
-        assert state["current_price"] == "500.0"
-        assert state["status"] == "ACTIVE"
-        assert state["seller_id"] == SELLER_ID
-        assert state["last_bidder"] == ""
-        assert state["bid_count"] == "0"
-        assert state["extension_count"] == "0"
-        assert state["watcher_count"] == "0"
-        assert state["min_increment"] == "50.0"
-
-    @pytest.mark.asyncio
-    async def test_sets_ttl(self, fake_redis):
-        auction = _make_auction()
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=3600)
-
-        ttl = await fake_redis.ttl(f"auction:{auction.id}")
-        assert ttl == 3600
-
-    @pytest.mark.asyncio
-    async def test_overwrites_existing_state(self, fake_redis):
-        auction = _make_auction(current_price=100.0)
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=7200)
-
-        # Re-init with different price
-        auction.current_price = 200.0
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=3600)
-
-        state = await fake_redis.hgetall(f"auction:{auction.id}")
-        assert state["current_price"] == "200.0"
+async def _init_auction_redis(fake_redis, auction_id, listing):
+    """Set up individual Redis keys matching what initialize_auction writes."""
+    aid = str(auction_id)
+    await fake_redis.set(_k(aid, "price"), str(listing.starting_price))
+    await fake_redis.set(_k(aid, "status"), "ACTIVE")
+    await fake_redis.set(_k(aid, "seller"), str(listing.seller_id))
+    await fake_redis.set(_k(aid, "last_bidder"), "")
+    await fake_redis.set(_k(aid, "bid_count"), "0")
+    await fake_redis.set(_k(aid, "extension_ct"), "0")
+    await fake_redis.set(_k(aid, "watcher_ct"), "0")
+    await fake_redis.set(_k(aid, "min_increment"), str(listing.min_increment))
+    await fake_redis.set(_k(aid, "reserve"), str(listing.reserve_price or 0))
+    await fake_redis.set(_root(aid), "active", ex=7200)
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 2. Read auction state
-# ═══════════════════════════════════════════════════════════════════
-
-class TestReadAuctionState:
-    @pytest.mark.asyncio
-    async def test_returns_state_dict(self, fake_redis):
-        auction = _make_auction()
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=7200)
-
-        state = await read_auction_state(auction.id, fake_redis)
-        assert state is not None
-        assert state["status"] == "ACTIVE"
-        assert "current_price" in state
-
-    @pytest.mark.asyncio
-    async def test_returns_none_for_missing_key(self, fake_redis):
-        state = await read_auction_state("nonexistent-id", fake_redis)
-        assert state is None
+def _has_celery() -> bool:
+    try:
+        import celery  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 3. Anti-snipe extension
+# 1. test_initialize_auction_sets_all_redis_keys
 # ═══════════════════════════════════════════════════════════════════
 
-class TestAntiSnipe:
+class TestInitializeAuctionSetsAllKeys:
     @pytest.mark.asyncio
-    async def test_extends_when_ttl_within_window(self, fake_redis):
-        """TTL <= 120s (ANTI_SNIPE_WINDOW_SECONDS) → extend by 120s."""
-        auction = _make_auction()
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=100)
-
-        extended = await check_anti_snipe(auction.id, fake_redis)
-        assert extended is True
-
-        # TTL should be 100 + 120 = 220
-        new_ttl = await fake_redis.ttl(f"auction:{auction.id}")
-        assert new_ttl == 220
-
-        # extension_count should be 1
-        ext = await fake_redis.hget(f"auction:{auction.id}", "extension_count")
-        assert ext == "1"
-
-    @pytest.mark.asyncio
-    async def test_no_extend_when_ttl_above_window(self, fake_redis):
-        """TTL > 120s → no extension."""
-        auction = _make_auction()
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=300)
-
-        extended = await check_anti_snipe(auction.id, fake_redis)
-        assert extended is False
-
-        ttl = await fake_redis.ttl(f"auction:{auction.id}")
-        assert ttl == 300
-
-    @pytest.mark.asyncio
-    async def test_respects_max_extensions(self, fake_redis):
-        """After MAX_ANTI_SNIPE_EXTENSIONS (5), no more extensions."""
-        auction = _make_auction()
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=60)
-
-        # Set extension_count to max (5)
-        await fake_redis.hset(f"auction:{auction.id}", mapping={"extension_count": "5"})
-
-        extended = await check_anti_snipe(auction.id, fake_redis)
-        assert extended is False
-
-    @pytest.mark.asyncio
-    async def test_multiple_extensions_increment(self, fake_redis):
-        """Multiple anti-snipe triggers increment extension_count."""
-        auction = _make_auction()
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=50)
-
-        await check_anti_snipe(auction.id, fake_redis)
-        # After first: TTL=170, ext=1
-        # Set TTL back to within window for next test
-        await fake_redis.expire(f"auction:{auction.id}", 80)
-
-        await check_anti_snipe(auction.id, fake_redis)
-        ext = await fake_redis.hget(f"auction:{auction.id}", "extension_count")
-        assert ext == "2"
-
-    @pytest.mark.asyncio
-    async def test_no_extend_for_missing_key(self, fake_redis):
-        """Missing auction key → no extension."""
-        extended = await check_anti_snipe("nonexistent", fake_redis)
-        assert extended is False
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 4. Bid + anti-snipe integration
-# ═══════════════════════════════════════════════════════════════════
-
-class TestBidAntiSnipeIntegration:
-    @pytest.mark.asyncio
-    async def test_bid_accepted_triggers_anti_snipe(self, fake_redis):
-        """Accepted bid near end of auction triggers anti-snipe extension."""
-        auction = _make_auction(current_price=100.0, min_increment=25.0)
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=90)
-
-        # Place a valid bid
-        status, reason = await place_bid(auction.id, BIDDER_ID, 200.0, fake_redis)
-        assert status == "ACCEPTED"
-        assert reason is None
-
-        # Now check anti-snipe (normally called in the router)
-        extended = await check_anti_snipe(auction.id, fake_redis)
-        assert extended is True
-
-        # Verify state updated correctly
-        state = await fake_redis.hgetall(f"auction:{auction.id}")
-        assert state["current_price"] == "200.0"
-        assert state["last_bidder"] == BIDDER_ID
-        assert state["bid_count"] == "1"
-        assert state["extension_count"] == "1"
-
-    @pytest.mark.asyncio
-    async def test_rejected_bid_no_state_change(self, fake_redis):
-        """Rejected bid (too low) doesn't change state."""
-        auction = _make_auction(current_price=100.0, min_increment=25.0)
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=90)
-
-        status, reason = await place_bid(auction.id, BIDDER_ID, 110.0, fake_redis)
-        assert status == "REJECTED"
-        assert reason == "BID_TOO_LOW"
-
-        state = await fake_redis.hgetall(f"auction:{auction.id}")
-        assert state["current_price"] == "100.0"
-        assert state["bid_count"] == "0"
-
-    @pytest.mark.asyncio
-    async def test_seller_cannot_bid(self, fake_redis):
-        auction = _make_auction(current_price=100.0, min_increment=25.0)
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=7200)
-
-        status, reason = await place_bid(auction.id, SELLER_ID, 200.0, fake_redis)
-        assert status == "REJECTED"
-        assert reason == "SELLER_CANNOT_BID"
-
-    @pytest.mark.asyncio
-    async def test_bid_on_ended_auction(self, fake_redis):
-        auction = _make_auction()
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=7200)
-        # Manually set status to ended
-        await fake_redis.hset(f"auction:{auction.id}", mapping={"status": "ENDED"})
-
-        status, reason = await place_bid(auction.id, BIDDER_ID, 200.0, fake_redis)
-        assert status == "REJECTED"
-        assert reason == "AUCTION_ENDED"
-
-    @pytest.mark.asyncio
-    async def test_banned_user_rejected(self, fake_redis):
-        banned_id = str(uuid4())
-        await fake_redis.sadd("banned_users", banned_id)
-
-        auction = _make_auction(current_price=100.0, min_increment=25.0)
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=7200)
-
-        status, reason = await place_bid(auction.id, banned_id, 200.0, fake_redis)
-        assert status == "REJECTED"
-        assert reason == "USER_BANNED"
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 5. End auction — Redis → PostgreSQL sync
-# ═══════════════════════════════════════════════════════════════════
-
-class TestEndAuction:
-    @pytest.mark.asyncio
-    async def test_syncs_state_to_postgres(self, fake_redis, db_session):
-        """end_auction reads Redis state and writes to PostgreSQL."""
-        auction = _make_auction(current_price=100.0)
-        db_session.add(auction)
-        await db_session.commit()
-
-        # Initialize in Redis with some bids
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=7200)
-        await place_bid(auction.id, BIDDER_ID, 200.0, fake_redis)
-        await place_bid(auction.id, BIDDER_ID, 300.0, fake_redis)
-
-        result = await end_auction(auction.id, fake_redis, db_session)
-
-        assert result is not None
-        assert result.status == AuctionStatus.ENDED
-        assert float(result.current_price) == 300.0
-        assert result.bid_count == 2
-        assert result.winner_id == BIDDER_ID
-        assert float(result.final_price) == 300.0
-
-    @pytest.mark.asyncio
-    async def test_deletes_redis_key_after_sync(self, fake_redis, db_session):
-        auction = _make_auction()
-        db_session.add(auction)
-        await db_session.commit()
-
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=7200)
-        await end_auction(auction.id, fake_redis, db_session)
-
-        exists = await fake_redis.exists(f"auction:{auction.id}")
-        assert exists == 0
-
-    @pytest.mark.asyncio
-    async def test_end_auction_no_bids(self, fake_redis, db_session):
-        """Auction with no bids — winner_id stays None."""
-        auction = _make_auction(current_price=100.0)
-        db_session.add(auction)
-        await db_session.commit()
-
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=7200)
-        result = await end_auction(auction.id, fake_redis, db_session)
-
-        assert result.status == AuctionStatus.ENDED
-        assert result.winner_id is None
-        assert result.bid_count == 0
-
-    @pytest.mark.asyncio
-    async def test_end_auction_missing_redis_key(self, fake_redis, db_session):
-        """Redis key already expired — returns None."""
-        auction = _make_auction()
-        db_session.add(auction)
-        await db_session.commit()
-
-        # Don't initialize in Redis
-        result = await end_auction(auction.id, fake_redis, db_session)
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_end_auction_missing_in_postgres(self, fake_redis, db_session):
-        """Auction not in PostgreSQL — returns None."""
-        fake_id = str(uuid4())
-        # Create Redis state for non-existent PG auction
-        await fake_redis.hset(f"auction:{fake_id}", mapping={
-            "current_price": "100", "status": "ACTIVE",
-            "seller_id": SELLER_ID, "last_bidder": "",
-            "bid_count": "0", "extension_count": "0",
-            "watcher_count": "0", "min_increment": "25",
-        })
-
-        result = await end_auction(fake_id, fake_redis, db_session)
-        assert result is None
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 6. Handle auction expiry (Celery task)
-# ═══════════════════════════════════════════════════════════════════
-
-class TestHandleAuctionExpiry:
-    @pytest.mark.asyncio
-    async def test_expiry_syncs_to_postgres_and_creates_escrow(self, fake_redis, db_session):
-        """Simulates key expiry: reads Redis state, updates PG, creates escrow."""
-        from app.services.auction.lifecycle import handle_auction_expiry_async
-        from app.services.listing.models import Listing
-
-        listing = Listing(
-            id=str(uuid4()),
-            seller_id=SELLER_ID,
-            title_ar="اختبار",
-            description_ar="وصف",
-            category_id=1,
-            condition="good",
-            starting_price=100.0,
-            status="active",
-        )
-        db_session.add(listing)
-        await db_session.flush()
-
-        auction = _make_auction(
-            listing_id=listing.id,
-            current_price=100.0,
-            status=AuctionStatus.ACTIVE.value,
-        )
-        db_session.add(auction)
-        await db_session.commit()
-
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=7200)
-        await place_bid(auction.id, BIDDER_ID, 500.0, fake_redis)
-
-        # Mock create_escrow since Escrow table doesn't exist in SQLite
-        with patch("app.services.escrow.service.create_escrow", new_callable=AsyncMock) as mock_escrow:
-            mock_escrow.return_value = MagicMock(id=str(uuid4()), amount=500.0)
-            await handle_auction_expiry_async(auction.id, fake_redis, db_session)
-
-            mock_escrow.assert_called_once()
-            call_kwargs = mock_escrow.call_args
-            assert call_kwargs[1]["winner_id"] == BIDDER_ID
-            assert call_kwargs[1]["seller_id"] == SELLER_ID
-            assert call_kwargs[1]["amount"] == 500.0
-
-        await db_session.refresh(auction)
-        assert auction.status == AuctionStatus.ENDED.value
-
-    @pytest.mark.asyncio
-    async def test_expiry_no_bids_no_escrow(self, fake_redis, db_session):
-        """Auction with no bids → no escrow created."""
-        from app.services.auction.lifecycle import handle_auction_expiry_async
-        from app.services.listing.models import Listing
-
-        listing = Listing(
-            id=str(uuid4()),
-            seller_id=SELLER_ID,
-            title_ar="اختبار",
-            description_ar="وصف",
-            category_id=1,
-            condition="good",
-            starting_price=100.0,
-            status="active",
-        )
-        db_session.add(listing)
-        await db_session.flush()
-
-        auction = _make_auction(
-            listing_id=listing.id,
-            current_price=100.0,
-            status=AuctionStatus.ACTIVE.value,
-        )
-        db_session.add(auction)
-        await db_session.commit()
-
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=7200)
-
-        with patch("app.services.escrow.service.create_escrow", new_callable=AsyncMock) as mock_escrow:
-            await handle_auction_expiry_async(auction.id, fake_redis, db_session)
-            mock_escrow.assert_not_called()
-
-        await db_session.refresh(auction)
-        assert auction.status == AuctionStatus.ENDED.value
-        assert auction.winner_id is None
-
-    @pytest.mark.asyncio
-    async def test_expiry_already_ended_skips(self, fake_redis, db_session):
-        """Already-ended auction is skipped."""
-        from app.services.auction.lifecycle import handle_auction_expiry_async
-
-        auction = _make_auction(status=AuctionStatus.ENDED.value)
-        db_session.add(auction)
-        await db_session.commit()
-
-        await handle_auction_expiry_async(auction.id, fake_redis, db_session)
-
-        await db_session.refresh(auction)
-        assert auction.status == AuctionStatus.ENDED.value
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 7. Activate scheduled auctions (Celery Beat task)
-# ═══════════════════════════════════════════════════════════════════
-
-class TestActivateScheduledAuctions:
-    @pytest.mark.asyncio
-    async def test_activates_due_auction(self, fake_redis, db_session):
-        """Scheduled auction whose starts_at has passed gets activated."""
-        from app.services.auction.lifecycle import activate_scheduled_auctions_async
-        from app.services.listing.models import Listing
-
-        listing = Listing(
-            id=str(uuid4()),
-            seller_id=SELLER_ID,
-            title_ar="اختبار",
-            description_ar="وصف",
-            category_id=1,
-            condition="good",
-            starting_price=100.0,
-            status="active",
-        )
+    async def test_initialize_auction_sets_all_redis_keys(self, fake_redis, db_session):
+        """initialize_auction sets all individual Redis keys + root TTL."""
+        listing = _make_listing(starting_price=15000, min_increment=2500, reserve_price=50000)
         db_session.add(listing)
         await db_session.flush()
 
@@ -482,39 +125,54 @@ class TestActivateScheduledAuctions:
             status=AuctionStatus.SCHEDULED.value,
             starts_at=(now - timedelta(minutes=1)).isoformat(),
             ends_at=(now + timedelta(hours=2)).isoformat(),
-            current_price=100.0,
+            current_price=15000,
         )
         db_session.add(auction)
         await db_session.commit()
 
-        count = await activate_scheduled_auctions_async(fake_redis, db_session)
-        assert count == 1
+        with patch("app.services.auction.service.sync_listing_to_meilisearch", create=True), \
+             patch("app.services.auction.service.send_notification", create=True):
+            result = await initialize_auction(
+                auction_id=auction.id,
+                listing_id=listing.id,
+                db=db_session,
+                redis=fake_redis,
+            )
 
+        assert result["status"] == "initialized"
+
+        aid = auction.id
+        # Verify all individual keys
+        assert await fake_redis.get(_k(aid, "price")) == "15000"
+        assert await fake_redis.get(_k(aid, "status")) == "ACTIVE"
+        assert await fake_redis.get(_k(aid, "seller")) == SELLER_ID
+        assert await fake_redis.get(_k(aid, "last_bidder")) == ""
+        assert await fake_redis.get(_k(aid, "bid_count")) == "0"
+        assert await fake_redis.get(_k(aid, "extension_ct")) == "0"
+        assert await fake_redis.get(_k(aid, "watcher_ct")) == "0"
+        assert await fake_redis.get(_k(aid, "min_increment")) == "2500"
+        assert await fake_redis.get(_k(aid, "reserve")) == "50000"
+
+        # Root key with TTL
+        root_val = await fake_redis.get(_root(aid))
+        assert root_val == "active"
+        root_ttl = await fake_redis.ttl(_root(aid))
+        assert root_ttl > 0
+
+        # DB updated
         await db_session.refresh(auction)
         assert auction.status == AuctionStatus.ACTIVE.value
-        assert auction.redis_synced_at is not None
 
-        state = await fake_redis.hgetall(f"auction:{auction.id}")
-        assert state["status"] == "ACTIVE"
-        assert state["current_price"] == "100.0"
-        assert state["seller_id"] == SELLER_ID
 
+# ═══════════════════════════════════════════════════════════════════
+# 2. test_initialize_auction_idempotent
+# ═══════════════════════════════════════════════════════════════════
+
+class TestInitializeAuctionIdempotent:
     @pytest.mark.asyncio
-    async def test_skips_future_auction(self, fake_redis, db_session):
-        """Auction with future starts_at is not activated."""
-        from app.services.auction.lifecycle import activate_scheduled_auctions_async
-        from app.services.listing.models import Listing
-
-        listing = Listing(
-            id=str(uuid4()),
-            seller_id=SELLER_ID,
-            title_ar="اختبار",
-            description_ar="وصف",
-            category_id=1,
-            condition="good",
-            starting_price=100.0,
-            status="active",
-        )
+    async def test_initialize_auction_idempotent(self, fake_redis, db_session):
+        """Calling initialize_auction twice → second call is skipped."""
+        listing = _make_listing()
         db_session.add(listing)
         await db_session.flush()
 
@@ -522,34 +180,32 @@ class TestActivateScheduledAuctions:
         auction = _make_auction(
             listing_id=listing.id,
             status=AuctionStatus.SCHEDULED.value,
-            starts_at=(now + timedelta(hours=1)).isoformat(),
-            ends_at=(now + timedelta(hours=3)).isoformat(),
+            starts_at=(now - timedelta(minutes=1)).isoformat(),
+            ends_at=(now + timedelta(hours=2)).isoformat(),
         )
         db_session.add(auction)
         await db_session.commit()
 
-        count = await activate_scheduled_auctions_async(fake_redis, db_session)
-        assert count == 0
+        with patch("app.services.auction.service.sync_listing_to_meilisearch", create=True), \
+             patch("app.services.auction.service.send_notification", create=True):
+            result1 = await initialize_auction(auction.id, listing.id, db_session, fake_redis)
+            assert result1["status"] == "initialized"
 
-        await db_session.refresh(auction)
-        assert auction.status == AuctionStatus.SCHEDULED.value
+            # Second call — auction is now ACTIVE, should skip
+            result2 = await initialize_auction(auction.id, listing.id, db_session, fake_redis)
+            assert result2["status"] == "skipped"
+            assert result2["reason"] == "already_active"
 
+
+# ═══════════════════════════════════════════════════════════════════
+# 3. test_initialize_auction_past_ends_at → marks ended immediately
+# ═══════════════════════════════════════════════════════════════════
+
+class TestInitializeAuctionPastEndsAt:
     @pytest.mark.asyncio
-    async def test_marks_expired_auction_as_ended(self, fake_redis, db_session):
-        """Auction whose ends_at is already past gets marked ENDED."""
-        from app.services.auction.lifecycle import activate_scheduled_auctions_async
-        from app.services.listing.models import Listing
-
-        listing = Listing(
-            id=str(uuid4()),
-            seller_id=SELLER_ID,
-            title_ar="اختبار",
-            description_ar="وصف",
-            category_id=1,
-            condition="good",
-            starting_price=100.0,
-            status="active",
-        )
+    async def test_initialize_auction_past_ends_at(self, fake_redis, db_session):
+        """Auction with past ends_at → marked ended immediately, no Redis keys."""
+        listing = _make_listing()
         db_session.add(listing)
         await db_session.flush()
 
@@ -563,115 +219,435 @@ class TestActivateScheduledAuctions:
         db_session.add(auction)
         await db_session.commit()
 
-        await activate_scheduled_auctions_async(fake_redis, db_session)
+        result = await initialize_auction(auction.id, listing.id, db_session, fake_redis)
+
+        assert result["status"] == "ended"
+        assert result["reason"] == "past_ends_at"
+
+        # No Redis keys should be set
+        assert await fake_redis.get(_k(auction.id, "status")) is None
+        assert await fake_redis.get(_root(auction.id)) is None
+
+        # DB should be marked ended
+        await db_session.refresh(auction)
+        assert auction.status == AuctionStatus.ENDED.value
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 4. test_handle_expiry_with_winner → escrow created, winner notified
+# ═══════════════════════════════════════════════════════════════════
+
+class TestHandleExpiryWithWinner:
+    @pytest.mark.asyncio
+    async def test_handle_expiry_with_winner(self, fake_redis, db_session):
+        """Auction with bids → escrow created, winner + seller notified."""
+        listing = _make_listing()
+        db_session.add(listing)
+        await db_session.flush()
+
+        auction = _make_auction(
+            listing_id=listing.id,
+            status=AuctionStatus.ACTIVE.value,
+        )
+        db_session.add(auction)
+        await db_session.commit()
+
+        # Set up Redis state with a winning bid
+        await _init_auction_redis(fake_redis, auction.id, listing)
+        await place_bid(auction.id, BIDDER_ID, 50000, fake_redis)
+
+        # Verify bid was accepted
+        assert await fake_redis.get(_k(auction.id, "last_bidder")) == BIDDER_ID
+        assert await fake_redis.get(_k(auction.id, "bid_count")) == "1"
+
+        with patch("app.services.escrow.service.create_escrow", new_callable=AsyncMock) as mock_escrow, \
+             patch("app.services.auction.service.send_notification", create=True), \
+             patch("app.services.auction.service.update_ats_scores", create=True):
+            mock_escrow.return_value = MagicMock(id=str(uuid4()), amount=50000)
+            result = await handle_auction_expiry(auction.id, fake_redis, db_session)
+
+        assert result["status"] == "ended"
+        assert result["outcome"] == "winner"
+        assert result["winner_id"] == BIDDER_ID
+        assert result["final_price"] == 50000
+        assert result["bid_count"] == 1
+
+        # Escrow was created
+        mock_escrow.assert_called_once()
+        call_kw = mock_escrow.call_args.kwargs
+        assert call_kw["winner_id"] == BIDDER_ID
+        assert call_kw["seller_id"] == SELLER_ID
+        assert call_kw["amount"] == 50000
+
+        # DB updated
+        await db_session.refresh(auction)
+        assert auction.status == AuctionStatus.ENDED.value
+        assert auction.winner_id == BIDDER_ID
+
+        # Redis keys cleaned up
+        assert await fake_redis.get(_k(auction.id, "status")) is None
+        assert await fake_redis.get(_k(auction.id, "price")) is None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 5. test_handle_expiry_reserve_not_met → no escrow, all notified
+# ═══════════════════════════════════════════════════════════════════
+
+class TestHandleExpiryReserveNotMet:
+    @pytest.mark.asyncio
+    async def test_handle_expiry_reserve_not_met(self, fake_redis, db_session):
+        """Bids exist but below reserve → no escrow, reserve_met=False."""
+        listing = _make_listing(reserve_price=100000)
+        db_session.add(listing)
+        await db_session.flush()
+
+        auction = _make_auction(
+            listing_id=listing.id,
+            status=AuctionStatus.ACTIVE.value,
+        )
+        db_session.add(auction)
+        await db_session.commit()
+
+        # Set up Redis with reserve and a bid below it
+        await _init_auction_redis(fake_redis, auction.id, listing)
+        await place_bid(auction.id, BIDDER_ID, 50000, fake_redis)
+
+        with patch("app.services.escrow.service.create_escrow", new_callable=AsyncMock) as mock_escrow, \
+             patch("app.services.auction.service.send_notification", create=True), \
+             patch("app.services.auction.service.update_ats_scores", create=True):
+            result = await handle_auction_expiry(auction.id, fake_redis, db_session)
+
+        assert result["status"] == "ended"
+        assert result["outcome"] == "reserve_not_met"
+        assert result["winner_id"] is None
+
+        # No escrow created
+        mock_escrow.assert_not_called()
+
+        # DB: reserve_met = False
+        await db_session.refresh(auction)
+        assert auction.reserve_met is False
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 6. test_handle_expiry_no_bids → listing marked ended cleanly
+# ═══════════════════════════════════════════════════════════════════
+
+class TestHandleExpiryNoBids:
+    @pytest.mark.asyncio
+    async def test_handle_expiry_no_bids(self, fake_redis, db_session):
+        """No bids at all → listing ended, no escrow, no winner."""
+        listing = _make_listing()
+        db_session.add(listing)
+        await db_session.flush()
+
+        auction = _make_auction(
+            listing_id=listing.id,
+            status=AuctionStatus.ACTIVE.value,
+        )
+        db_session.add(auction)
+        await db_session.commit()
+
+        await _init_auction_redis(fake_redis, auction.id, listing)
+
+        with patch("app.services.escrow.service.create_escrow", new_callable=AsyncMock) as mock_escrow, \
+             patch("app.services.auction.service.send_notification", create=True), \
+             patch("app.services.auction.service.update_ats_scores", create=True):
+            result = await handle_auction_expiry(auction.id, fake_redis, db_session)
+
+        assert result["status"] == "ended"
+        assert result["outcome"] == "no_bids"
+        assert result["winner_id"] is None
+        assert result["bid_count"] == 0
+
+        mock_escrow.assert_not_called()
+
+        await db_session.refresh(auction)
+        assert auction.status == AuctionStatus.ENDED.value
+        assert auction.winner_id is None
+
+        # Listing ended
+        await db_session.refresh(listing)
+        assert listing.status == "ended"
+        assert listing.ended_at is not None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 7. test_stale_auction_failsafe_triggered
+# ═══════════════════════════════════════════════════════════════════
+
+class TestStaleAuctionFailsafe:
+    @pytest.mark.asyncio
+    async def test_stale_auction_failsafe_triggered(self, fake_redis, db_session):
+        """Auction active in DB but Redis root key gone → failsafe recovers it."""
+        from app.services.auction.service import check_stale_auctions
+
+        listing = _make_listing()
+        db_session.add(listing)
+        await db_session.flush()
+
+        now = datetime.now(timezone.utc)
+        auction = _make_auction(
+            listing_id=listing.id,
+            status=AuctionStatus.ACTIVE.value,
+            ends_at=(now - timedelta(minutes=10)).isoformat(),
+        )
+        db_session.add(auction)
+        await db_session.commit()
+
+        # Don't set any Redis keys — simulates expired key that was missed
+
+        with patch("app.services.escrow.service.create_escrow", new_callable=AsyncMock), \
+             patch("app.services.auction.service.send_notification", create=True), \
+             patch("app.services.auction.service.update_ats_scores", create=True):
+            recovered = await check_stale_auctions(fake_redis, db_session)
+
+        assert recovered == 1
 
         await db_session.refresh(auction)
         assert auction.status == AuctionStatus.ENDED.value
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 8. Celery Beat schedule verification
+# 8. Get auction state
+# ═══════════════════════════════════════════════════════════════════
+
+class TestGetAuctionState:
+    @pytest.mark.asyncio
+    async def test_returns_full_state_from_redis(self, fake_redis):
+        """get_auction_state reads all individual keys."""
+        listing = _make_listing()
+        aid = str(uuid4())
+        await _init_auction_redis(fake_redis, aid, listing)
+
+        state = await get_auction_state(aid, fake_redis)
+        assert state["status"] == "ACTIVE"
+        assert state["current_price"] == 10000
+        assert state["seller_id"] == SELLER_ID
+        assert state["bid_count"] == 0
+        assert state["watcher_count"] == 0
+        assert state["min_increment"] == 2500
+
+    @pytest.mark.asyncio
+    async def test_returns_not_found_for_missing(self, fake_redis):
+        state = await get_auction_state("nonexistent", fake_redis)
+        assert state["status"] == "NOT_FOUND"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_db(self, fake_redis, db_session):
+        """If no Redis keys, reads from DB."""
+        auction = _make_auction(status=AuctionStatus.ENDED.value, current_price=50000, bid_count=5)
+        db_session.add(auction)
+        await db_session.commit()
+
+        state = await get_auction_state(auction.id, fake_redis, db=db_session)
+        assert state["status"] == AuctionStatus.ENDED.value
+        assert state["current_price"] == 50000
+        assert state["bid_count"] == 5
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 9. Anti-snipe extension
+# ═══════════════════════════════════════════════════════════════════
+
+class TestAntiSnipe:
+    @pytest.mark.asyncio
+    async def test_bid_extends_when_ttl_under_threshold(self, fake_redis):
+        """Bid with TTL <= 180s triggers anti-snipe extension inside Lua."""
+        from app.services.auction.lua_scripts import BidLuaScripts
+        BidLuaScripts.reset()
+
+        listing = _make_listing(starting_price=10000, min_increment=2500)
+        aid = str(uuid4())
+        await _init_auction_redis(fake_redis, aid, listing)
+        await fake_redis.set(_root(aid), "active", ex=100)
+
+        result = await place_bid(aid, BIDDER_ID, 20000, fake_redis)
+        assert result.accepted
+        assert result.extended is True
+        assert result.new_ttl == 280  # 100 + 180
+
+        ext = await fake_redis.get(_k(aid, "extension_ct"))
+        assert ext == "1"
+
+    @pytest.mark.asyncio
+    async def test_bid_no_extend_when_ttl_above_threshold(self, fake_redis):
+        """Bid with TTL > 180s does NOT trigger anti-snipe."""
+        from app.services.auction.lua_scripts import BidLuaScripts
+        BidLuaScripts.reset()
+
+        listing = _make_listing(starting_price=10000, min_increment=2500)
+        aid = str(uuid4())
+        await _init_auction_redis(fake_redis, aid, listing)
+        await fake_redis.set(_root(aid), "active", ex=300)
+
+        result = await place_bid(aid, BIDDER_ID, 20000, fake_redis)
+        assert result.accepted
+        assert result.extended is False
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 10. Bid integration
+# ═══════════════════════════════════════════════════════════════════
+
+class TestBidIntegration:
+    @pytest.mark.asyncio
+    async def test_bid_accepted_updates_keys(self, fake_redis):
+        from app.services.auction.lua_scripts import BidLuaScripts
+        BidLuaScripts.reset()
+
+        listing = _make_listing(starting_price=10000, min_increment=2500)
+        aid = str(uuid4())
+        await _init_auction_redis(fake_redis, aid, listing)
+
+        result = await place_bid(aid, BIDDER_ID, 20000, fake_redis)
+        assert result.accepted
+        assert result.new_price == 20000
+
+        assert await fake_redis.get(_k(aid, "price")) == "20000"
+        assert await fake_redis.get(_k(aid, "last_bidder")) == BIDDER_ID
+        assert await fake_redis.get(_k(aid, "bid_count")) == "1"
+
+    @pytest.mark.asyncio
+    async def test_bid_too_low_rejected(self, fake_redis):
+        from app.services.auction.lua_scripts import BidLuaScripts
+        BidLuaScripts.reset()
+
+        listing = _make_listing(starting_price=10000, min_increment=2500)
+        aid = str(uuid4())
+        await _init_auction_redis(fake_redis, aid, listing)
+
+        result = await place_bid(aid, BIDDER_ID, 11000, fake_redis)
+        assert not result.accepted
+        assert result.rejection_reason == "BID_TOO_LOW"
+        assert result.min_required == 12500
+
+    @pytest.mark.asyncio
+    async def test_seller_cannot_bid(self, fake_redis):
+        from app.services.auction.lua_scripts import BidLuaScripts
+        BidLuaScripts.reset()
+
+        listing = _make_listing()
+        aid = str(uuid4())
+        await _init_auction_redis(fake_redis, aid, listing)
+
+        result = await place_bid(aid, SELLER_ID, 50000, fake_redis)
+        assert not result.accepted
+        assert result.rejection_reason == "SELLER_CANNOT_BID"
+
+    @pytest.mark.asyncio
+    async def test_banned_user_rejected(self, fake_redis):
+        from app.services.auction.lua_scripts import BidLuaScripts
+        BidLuaScripts.reset()
+
+        banned_id = str(uuid4())
+        listing = _make_listing()
+        aid = str(uuid4())
+        await _init_auction_redis(fake_redis, aid, listing)
+        await fake_redis.sadd(_k(aid, "banned_set"), banned_id)
+
+        result = await place_bid(aid, banned_id, 50000, fake_redis)
+        assert not result.accepted
+        assert result.rejection_reason == "BIDDER_BANNED"
+
+    @pytest.mark.asyncio
+    async def test_bid_on_ended_auction(self, fake_redis):
+        from app.services.auction.lua_scripts import BidLuaScripts
+        BidLuaScripts.reset()
+
+        listing = _make_listing()
+        aid = str(uuid4())
+        await _init_auction_redis(fake_redis, aid, listing)
+        await fake_redis.set(_k(aid, "status"), "ENDED")
+
+        result = await place_bid(aid, BIDDER_ID, 50000, fake_redis)
+        assert not result.accepted
+        assert result.rejection_reason == "AUCTION_NOT_ACTIVE"
+
+    @pytest.mark.asyncio
+    async def test_sequential_bids(self, fake_redis):
+        """Multiple bids update state correctly in sequence."""
+        from app.services.auction.lua_scripts import BidLuaScripts
+        BidLuaScripts.reset()
+
+        listing = _make_listing(starting_price=10000, min_increment=1000)
+        aid = str(uuid4())
+        await _init_auction_redis(fake_redis, aid, listing)
+
+        bidder_a = str(uuid4())
+        bidder_b = str(uuid4())
+
+        r1 = await place_bid(aid, bidder_a, 15000, fake_redis)
+        assert r1.accepted
+
+        r2 = await place_bid(aid, bidder_b, 20000, fake_redis)
+        assert r2.accepted
+
+        # bidder_a can't bid below current + increment
+        r3 = await place_bid(aid, bidder_a, 20500, fake_redis)
+        assert not r3.accepted
+        assert r3.rejection_reason == "BID_TOO_LOW"
+
+        assert await fake_redis.get(_k(aid, "price")) == "20000"
+        assert await fake_redis.get(_k(aid, "last_bidder")) == bidder_b
+        assert await fake_redis.get(_k(aid, "bid_count")) == "2"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 11. Handle expiry idempotency
+# ═══════════════════════════════════════════════════════════════════
+
+class TestExpiryIdempotency:
+    @pytest.mark.asyncio
+    async def test_already_ended_skips(self, fake_redis, db_session):
+        """Already-ended auction is skipped."""
+        auction = _make_auction(status=AuctionStatus.ENDED.value)
+        db_session.add(auction)
+        await db_session.commit()
+
+        result = await handle_auction_expiry(auction.id, fake_redis, db_session)
+        assert result["status"] == "skipped"
+
+    @pytest.mark.asyncio
+    async def test_redis_status_ended_skips(self, fake_redis, db_session):
+        """If Redis status already ENDED, skip."""
+        listing = _make_listing()
+        db_session.add(listing)
+        await db_session.flush()
+
+        auction = _make_auction(listing_id=listing.id, status=AuctionStatus.ACTIVE.value)
+        db_session.add(auction)
+        await db_session.commit()
+
+        await _init_auction_redis(fake_redis, auction.id, listing)
+        await fake_redis.set(_k(auction.id, "status"), "ENDED")
+
+        result = await handle_auction_expiry(auction.id, fake_redis, db_session)
+        assert result["status"] == "skipped"
+        assert result["reason"] == "already_ended"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 12. Celery Beat schedule verification
 # ═══════════════════════════════════════════════════════════════════
 
 class TestCeleryBeatSchedule:
-    @pytest.mark.skipif(
-        not _has_celery(), reason="celery not installed",
-    )
+    @pytest.mark.skipif(not _has_celery(), reason="celery not installed")
     def test_auction_activation_in_beat_schedule(self):
         from app.core.celery import celery_app
 
         schedule = celery_app.conf.beat_schedule
         assert "activate-scheduled-auctions" in schedule
-
         entry = schedule["activate-scheduled-auctions"]
         assert entry["task"] == "app.tasks.auction.activate_scheduled_auctions"
         assert entry["schedule"] == 30.0
 
-    @pytest.mark.skipif(
-        not _has_celery(), reason="celery not installed",
-    )
-    def test_escrow_deadline_check_still_exists(self):
+    @pytest.mark.skipif(not _has_celery(), reason="celery not installed")
+    def test_stale_auction_check_in_beat_schedule(self):
         from app.core.celery import celery_app
 
         schedule = celery_app.conf.beat_schedule
-        assert "check-escrow-deadlines" in schedule
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 9. Edge cases
-# ═══════════════════════════════════════════════════════════════════
-
-class TestEdgeCases:
-    @pytest.mark.asyncio
-    async def test_concurrent_bids_sequential_state(self, fake_redis):
-        """Multiple bids update state correctly in sequence."""
-        auction = _make_auction(current_price=100.0, min_increment=10.0)
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=7200)
-
-        bidder_a = str(uuid4())
-        bidder_b = str(uuid4())
-
-        s1, _ = await place_bid(auction.id, bidder_a, 150.0, fake_redis)
-        assert s1 == "ACCEPTED"
-
-        s2, _ = await place_bid(auction.id, bidder_b, 200.0, fake_redis)
-        assert s2 == "ACCEPTED"
-
-        # bidder_a can't bid below current+increment
-        s3, r3 = await place_bid(auction.id, bidder_a, 205.0, fake_redis)
-        assert s3 == "REJECTED"
-        assert r3 == "BID_TOO_LOW"
-
-        state = await fake_redis.hgetall(f"auction:{auction.id}")
-        assert state["current_price"] == "200.0"
-        assert state["last_bidder"] == bidder_b
-        assert state["bid_count"] == "2"
-
-    @pytest.mark.asyncio
-    async def test_anti_snipe_at_boundary(self, fake_redis):
-        """TTL exactly at ANTI_SNIPE_WINDOW_SECONDS (120) triggers extension."""
-        auction = _make_auction()
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=120)
-
-        extended = await check_anti_snipe(auction.id, fake_redis)
-        assert extended is True
-
-    @pytest.mark.asyncio
-    async def test_anti_snipe_at_boundary_plus_one(self, fake_redis):
-        """TTL at 121 (just above window) → no extension."""
-        auction = _make_auction()
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=121)
-
-        extended = await check_anti_snipe(auction.id, fake_redis)
-        assert extended is False
-
-    @pytest.mark.asyncio
-    async def test_full_lifecycle(self, fake_redis, db_session):
-        """Full lifecycle: init → bids → anti-snipe → end → verify PG."""
-        auction = _make_auction(current_price=50.0, min_increment=10.0)
-        db_session.add(auction)
-        await db_session.commit()
-
-        # Init
-        await initialize_auction_in_redis(auction, SELLER_ID, fake_redis, ttl_seconds=100)
-
-        # Bid 1
-        s, _ = await place_bid(auction.id, BIDDER_ID, 100.0, fake_redis)
-        assert s == "ACCEPTED"
-
-        # Anti-snipe (TTL=100 <= 120)
-        ext = await check_anti_snipe(auction.id, fake_redis)
-        assert ext is True
-
-        # Bid 2
-        bidder2 = str(uuid4())
-        s, _ = await place_bid(auction.id, bidder2, 200.0, fake_redis)
-        assert s == "ACCEPTED"
-
-        # End auction
-        result = await end_auction(auction.id, fake_redis, db_session)
-        assert result.status == AuctionStatus.ENDED
-        assert float(result.final_price) == 200.0
-        assert result.winner_id == bidder2
-        assert result.bid_count == 2
-        assert result.extension_count == 1
+        assert "check-stale-auctions" in schedule
+        entry = schedule["check-stale-auctions"]
+        assert entry["task"] == "app.tasks.auction.check_stale_auctions"
+        assert entry["schedule"] == 300.0

@@ -51,7 +51,7 @@ class BidAcceptedResponse(BaseModel):
 
 class BidRejectedResponse(BaseModel):
     status: str  # REJECTED
-    reason: str  # BID_TOO_LOW | AUCTION_ENDED | SELLER_CANNOT_BID | USER_BANNED
+    reason: str  # BID_TOO_LOW | AUCTION_NOT_ACTIVE | SELLER_CANNOT_BID | BIDDER_BANNED
 
 
 class ProxyBidRequest(BaseModel):

@@ -59,3 +59,12 @@ infra/terraform/.terraform.lock.hcl
 # OS
 Thumbs.db
 Desktop.ini
+
+# Claude Code (local extracted docs + settings)
+.claude/
+
+# Business documents (not source code)
+Documents/
+
+# Flutter run config
+mobile/.pipeflutter_run

@@ -55,6 +55,7 @@ async def register(
     status_code=status.HTTP_200_OK,
     responses={
         401: {"description": "Invalid or expired OTP"},
+        403: {"description": "Account banned"},
         429: {"description": "Locked out after too many attempts"},
     },
 )
@@ -66,7 +67,6 @@ async def verify_otp(
     """Verify OTP → create/load user → issue JWT pair.
 
     FR-AUTH-001: Max 3 verify attempts, then 15-min lockout.
-    Postcondition: User in PENDING_KYC state, JWT pair issued.
     """
     valid, error_code, error_detail = await service.verify_otp(
         body.phone, body.otp, redis,
@@ -79,37 +79,28 @@ async def verify_otp(
         )
         raise HTTPException(status_code=status_code, detail=error_detail)
 
-    user, _is_new = await service.get_or_create_user(body.phone, db)
+    try:
+        user, _is_new = await service.get_or_create_user(body.phone, db)
+    except ValueError as exc:
+        if str(exc) == "ACCOUNT_BANNED":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "ACCOUNT_BANNED",
+                    "message_en": "Account has been permanently banned",
+                    "message_ar": "تم حظر الحساب بشكل دائم",
+                },
+            )
+        raise
+
     access_token, refresh_token, _jti = service.issue_tokens(user)
-    await service.store_refresh_token(refresh_token, user.id, redis)
+    await service.store_refresh_token(refresh_token, user.id, db)
 
     return schemas.AuthResponse(
         access_token=access_token,
         refresh_token=refresh_token,
-        user=schemas.UserOut.model_validate(user),
+        user=schemas.UserResponse.model_validate(user),
     )
-
-
-# ── POST /auth/login ───────────────────────────────────────────
-
-@router.post(
-    "/login",
-    response_model=schemas.OTPSentResponse,
-    status_code=status.HTTP_200_OK,
-    responses={429: {"description": "Rate limited or locked out"}},
-)
-async def login(
-    body: schemas.LoginRequest,
-    redis: Redis = Depends(get_redis),
-):
-    """Login — sends OTP to existing phone."""
-    success, _error_code, error_detail = await service.send_otp(body.phone, redis)
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=error_detail,
-        )
-    return schemas.OTPSentResponse()
 
 
 # ── POST /auth/refresh — FR-AUTH-003 ──────────────────────────
@@ -121,15 +112,14 @@ async def login(
 )
 async def refresh_token(
     body: schemas.RefreshRequest,
-    redis: Redis = Depends(get_redis),
     db: AsyncSession = Depends(get_db),
 ):
     """Silent token refresh — exchange refresh token for a new pair.
 
     FR-AUTH-003: No re-login required. Old refresh token invalidated
-    (rotation) to prevent replay.
+    (rotation) to prevent replay. DB-based refresh tokens.
     """
-    user_id = await service.validate_refresh_token(body.refresh_token, redis)
+    user_id = await service.validate_refresh_token(body.refresh_token, db)
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -161,12 +151,10 @@ async def refresh_token(
             },
         )
 
-    # Invalidate old refresh token (rotation — prevents replay)
-    await service.revoke_refresh_token(body.refresh_token, redis)
-
-    # Issue new pair
+    # Rotate: revoke old, issue new
+    await service.revoke_refresh_token(body.refresh_token, db)
     access_token, new_refresh, _jti = service.issue_tokens(user)
-    await service.store_refresh_token(new_refresh, user.id, redis)
+    await service.store_refresh_token(new_refresh, user.id, db)
 
     return schemas.TokenResponse(access_token=access_token, refresh_token=new_refresh)
 
@@ -183,11 +171,12 @@ async def logout(
     body: schemas.LogoutRequest,
     user: User = Depends(get_current_user),
     redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db),
 ):
     """Logout — blacklist access token JTI + revoke refresh token.
 
     FR-AUTH-004: JWT blacklist in Redis with TTL = remaining validity.
-    SDD §5.2: POST /auth/logout takes {refresh_token}, returns {success: true}.
+    Optional revoke_all=true revokes all sessions for the user.
     """
     # Blacklist the current access token's JTI with remaining TTL
     payload = user._token_payload  # type: ignore[attr-defined]
@@ -196,10 +185,48 @@ async def logout(
     if remaining_seconds > 0:
         await service.blacklist_token(payload.jti, remaining_seconds, redis)
 
-    # Revoke the refresh token
-    await service.revoke_refresh_token(body.refresh_token, redis)
+    if body.revoke_all:
+        await service.revoke_all_user_tokens(user.id, db)
+    else:
+        await service.revoke_refresh_token(body.refresh_token, db)
 
     return schemas.LogoutResponse()
+
+
+# ── GET /auth/me — current user profile ────────────────────────
+
+@router.get(
+    "/me",
+    response_model=schemas.UserResponse,
+)
+async def get_me(
+    user: User = Depends(get_current_user),
+):
+    """Return the authenticated user's profile."""
+    return schemas.UserResponse.model_validate(user)
+
+
+# ── GET /auth/kyc/status ──────────────────────────────────────
+
+@router.get(
+    "/kyc/status",
+    response_model=schemas.KYCStatusResponse,
+)
+async def kyc_status(
+    user: User = Depends(get_current_user),
+):
+    """Return the user's current KYC verification status."""
+    kyc = user.kyc_status.value if hasattr(user.kyc_status, "value") else user.kyc_status
+    return schemas.KYCStatusResponse(
+        kyc_status=kyc,
+        kyc_submitted_at=(
+            user.kyc_submitted_at.isoformat() if user.kyc_submitted_at else None
+        ),
+        kyc_reviewed_at=(
+            user.kyc_reviewed_at.isoformat() if user.kyc_reviewed_at else None
+        ),
+        kyc_rejection_reason=user.kyc_rejection_reason,
+    )
 
 
 # ── POST /auth/kyc/initiate — FR-AUTH-005 ─────────────────────
@@ -214,13 +241,14 @@ async def logout(
 async def kyc_initiate(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ):
     """Generate S3 presigned upload URLs for KYC documents.
 
     PM-02 Steps 3-5: ID front, ID back, selfie.
-    SDD §6.2: SSE-S3, private ACL, 5-minute TTL.
+    SDD §6.2: SSE-S3, private ACL, 15-minute TTL.
     """
-    eligible, error_code = await kyc_service.check_kyc_eligibility(user)
+    eligible, error_code = await kyc_service.check_kyc_eligibility(user, redis)
     if not eligible:
         messages = {
             "ALREADY_VERIFIED": (
@@ -262,14 +290,14 @@ async def kyc_submit(
     body: schemas.KYCSubmitRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ):
     """Submit KYC documents for verification.
 
     FR-AUTH-005: Rekognition CompareFaces(selfie, id_front).
     PM-02 Step 7-8: confidence thresholds → auto/manual/reject.
-    SDD §5.2: POST /auth/kyc/submit → {status: 'verified'|'pending'}.
     """
-    eligible, error_code = await kyc_service.check_kyc_eligibility(user)
+    eligible, error_code = await kyc_service.check_kyc_eligibility(user, redis)
     if not eligible:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -282,6 +310,7 @@ async def kyc_submit(
         id_back_key=body.id_back_key,
         selfie_key=body.selfie_key,
         db=db,
+        redis=redis,
     )
 
     return schemas.KYCSubmitResponse(**result)

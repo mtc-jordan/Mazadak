@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # States that mean payment.captured was already processed
 _CAPTURED_OR_BEYOND = frozenset(
-    VALID_TRANSITIONS.keys() - {"initiated", "payment_pending", "payment_failed"}
+    VALID_TRANSITIONS.keys() - {"payment_pending"}
 )
 
 MAX_PAYMENT_RETRIES = 3
@@ -112,10 +112,10 @@ async def _handle_payment_captured(data: dict, db: AsyncSession) -> dict:
     # ── PAYMENT_PENDING → FUNDS_HELD ──────────────────────────────
     payment_id = data.get("id", "")
     escrow = await transition_escrow(
-        escrow_id, "funds_held", None, ActorType.SYSTEM,
+        escrow_id, "funds_held", None, ActorType.SYSTEM.value,
         "checkout.payment_captured",
-        meta={"payment_id": payment_id, "amount": captured_amount},
-        db=db,
+        {"payment_id": payment_id, "amount": captured_amount},
+        db,
     )
 
     # ── FUNDS_HELD → SHIPPING_REQUESTED ───────────────────────────
@@ -123,16 +123,11 @@ async def _handle_payment_captured(data: dict, db: AsyncSession) -> dict:
     deadline = datetime.now(timezone.utc) + timedelta(hours=settings.SHIPPING_DEADLINE_HOURS)
 
     escrow = await transition_escrow(
-        escrow_id, "shipping_requested", None, ActorType.SYSTEM,
+        escrow_id, "shipping_requested", None, ActorType.SYSTEM.value,
         "checkout.funds_confirmed",
-        meta={"shipping_deadline": deadline.isoformat()},
-        db=db,
+        {"shipping_deadline": deadline.isoformat()},
+        db,
     )
-
-    # Set shipping deadline on the escrow row
-    escrow.shipping_deadline = deadline.isoformat()
-    await db.commit()
-    await db.refresh(escrow)
 
     return {"status": "processed", "state": "shipping_requested"}
 
@@ -170,14 +165,6 @@ async def _handle_payment_declined(data: dict, db: AsyncSession) -> dict:
     decline_reason = data.get("response_summary", "unknown")
     payment_id = data.get("id", "")
 
-    # ── PAYMENT_PENDING → PAYMENT_FAILED ──────────────────────────
-    escrow = await transition_escrow(
-        escrow_id, "payment_failed", None, ActorType.SYSTEM,
-        "checkout.payment_declined",
-        meta={"payment_id": payment_id, "reason": decline_reason},
-        db=db,
-    )
-
     # ── Increment retry count ─────────────────────────────────────
     escrow.retry_count = (escrow.retry_count or 0) + 1
     await db.commit()
@@ -186,10 +173,10 @@ async def _handle_payment_declined(data: dict, db: AsyncSession) -> dict:
     # ── After max retries → CANCELLED + notify second bidder ──────
     if escrow.retry_count >= MAX_PAYMENT_RETRIES:
         escrow = await transition_escrow(
-            escrow_id, "cancelled", None, ActorType.SYSTEM,
+            escrow_id, "cancelled", None, ActorType.SYSTEM.value,
             "checkout.max_retries_exceeded",
-            meta={"retry_count": escrow.retry_count, "last_decline": decline_reason},
-            db=db,
+            {"retry_count": escrow.retry_count, "last_decline": decline_reason},
+            db,
         )
         _dispatch_second_bidder_notification(escrow)
         return {
@@ -200,8 +187,9 @@ async def _handle_payment_declined(data: dict, db: AsyncSession) -> dict:
 
     return {
         "status": "processed",
-        "state": "payment_failed",
+        "state": "payment_pending",
         "retry_count": escrow.retry_count,
+        "reason": decline_reason,
     }
 
 
@@ -226,10 +214,10 @@ async def _handle_payment_refunded(data: dict, db: AsyncSession) -> dict:
     if hasattr(current, "value"):
         current = current.value
 
-    if current == "refunded":
-        return {"status": "already_processed", "state": "refunded"}
+    if current == "resolved_refunded":
+        return {"status": "already_processed", "state": "resolved_refunded"}
 
-    if "refunded" not in VALID_TRANSITIONS.get(current, []):
+    if "resolved_refunded" not in VALID_TRANSITIONS.get(current, []):
         logger.info(
             "Cannot apply payment.refunded to escrow %s (state=%s)", escrow_id, current,
         )
@@ -237,12 +225,12 @@ async def _handle_payment_refunded(data: dict, db: AsyncSession) -> dict:
 
     payment_id = data.get("id", "")
     escrow = await transition_escrow(
-        escrow_id, "refunded", None, ActorType.SYSTEM,
+        escrow_id, "resolved_refunded", None, ActorType.SYSTEM.value,
         "checkout.payment_refunded",
-        meta={"payment_id": payment_id},
-        db=db,
+        {"payment_id": payment_id},
+        db,
     )
-    return {"status": "processed", "state": "refunded"}
+    return {"status": "processed", "state": "resolved_refunded"}
 
 
 # ── Helpers ───────────────────────────────────────────────────────

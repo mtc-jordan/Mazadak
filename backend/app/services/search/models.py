@@ -14,20 +14,21 @@ class SearchableListingDocument(BaseModel):
     id: str
     title_ar: str
     title_en: str | None = None
-    description_ar: str
+    description_ar: str | None = None
     description_en: str | None = None
+    brand: str | None = None
     category_id: int
     condition: str
-    starting_price: float
-    listing_currency: str
+    starting_price: int  # cents
+    current_price: int | None = None
     status: str
     seller_id: str
-    is_charity: bool
-    image_url: str  # primary image (index 0)
-    created_at: str
-    # New fields for FR-SRCH
-    brand: str | None = None
-    city: str | None = None
-    is_authenticated: bool = False
+    seller_ats: int = 0
+    is_charity: bool = False
+    is_certified: bool = False
+    image_url: str = ""  # primary image thumbnail
+    location_city: str | None = None
+    location_country: str = "JO"
     bid_count: int = 0
-    ends_at: str | None = None  # from auctions table
+    ends_at_timestamp: int | None = None   # Unix timestamp for range filters
+    created_at_timestamp: int | None = None

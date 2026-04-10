@@ -2,11 +2,12 @@
 Database seed script — populates dev environment with test data.
 
 Usage:
-    python -m app.db.seed          (from /backend)
-    make seed                      (from repo root)
+    python -m scripts.seed          (from /backend)
+    docker compose exec api python -m scripts.seed
 
 Requires: migrations applied, PostgreSQL running.
-Uses raw SQL inserts to avoid model import issues during early dev.
+Uses raw SQL inserts matching the 0001_initial_schema migration.
+All monetary values are INTEGER cents (1 JOD = 1000 fils).
 """
 
 import asyncio
@@ -14,7 +15,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from app.core.config import settings
 
@@ -32,14 +37,12 @@ SELLER_2_ID = _uuid()
 BUYER_1_ID = _uuid()
 BUYER_2_ID = _uuid()
 MEDIATOR_ID = _uuid()
-NGO_ID = _uuid()
 
 NOW = datetime.now(timezone.utc)
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Categories — 12 top-level (SDD: "12 top-level, ~80 subcategories")
-# Phase 1 focus: Electronics, Vehicles, Furniture (BRD §Phase 1)
+# Categories — 12 top-level + subcategories for Phase 1
 # ═══════════════════════════════════════════════════════════════════
 CATEGORIES = [
     # (id, parent_id, name_ar, name_en, slug, sort_order)
@@ -55,7 +58,7 @@ CATEGORIES = [
     (10, None, "ألعاب أطفال", "Toys & Kids", "toys-kids", 10),
     (11, None, "أعمال ومعدات", "Business & Equipment", "business-equipment", 11),
     (12, None, "أخرى", "Other", "other", 12),
-    # Subcategories for Phase 1 categories
+    # Subcategories for Phase 1
     (13, 1, "هواتف ذكية", "Smartphones", "electronics-smartphones", 1),
     (14, 1, "حواسيب محمولة", "Laptops", "electronics-laptops", 2),
     (15, 1, "أجهزة لوحية", "Tablets", "electronics-tablets", 3),
@@ -72,19 +75,26 @@ CATEGORIES = [
 
 async def seed():
     engine = create_async_engine(settings.DATABASE_URL, echo=False)
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False,
+    )
 
     async with session_factory() as db:
         # Check if already seeded
         result = await db.execute(text("SELECT count(*) FROM users"))
         if result.scalar() > 0:
-            print("Database already has data — skipping seed. Use 'make reset-db' to start fresh.")
+            print(
+                "Database already has data — skipping seed. "
+                "Use 'docker compose down -v && docker compose up -d' to start fresh.",
+            )
             await engine.dispose()
             return
 
         print("Seeding database...")
 
         # ── Categories ────────────────────────────────────────────
+        # Migration seeds 8 basic categories; replace with full set
+        await db.execute(text("DELETE FROM categories"))
         for cat_id, parent_id, name_ar, name_en, slug, sort_order in CATEGORIES:
             await db.execute(text("""
                 INSERT INTO categories (id, parent_id, name_ar, name_en, slug, sort_order)
@@ -94,44 +104,64 @@ async def seed():
                 "name_ar": name_ar, "name_en": name_en,
                 "slug": slug, "sort_order": sort_order,
             })
-        print(f"  ✓ {len(CATEGORIES)} categories")
+        # Reset sequence so next auto-insert gets id > 23
+        await db.execute(text(
+            "SELECT setval('categories_id_seq', (SELECT MAX(id) FROM categories))",
+        ))
+        print(f"  + {len(CATEGORIES)} categories (12 top-level + subcategories)")
 
         # ── NGO Partner ───────────────────────────────────────────
         await db.execute(text("""
-            INSERT INTO ngo_partners (id, name_ar, name_en, registration_number, country_code, is_verified)
-            VALUES (:id, :name_ar, :name_en, :reg, :cc, true)
+            INSERT INTO ngo_partners (name_ar, name_en, is_zakat_eligible, is_active)
+            VALUES (:name_ar, :name_en, true, true)
         """), {
-            "id": NGO_ID,
             "name_ar": "جمعية الخير الأردنية",
             "name_en": "Jordan Charity Association",
-            "reg": "NGO-JO-2024-001",
-            "cc": "JO",
         })
-        print("  ✓ 1 NGO partner")
+        # Fetch auto-generated NGO id
+        ngo_result = await db.execute(text(
+            "SELECT id FROM ngo_partners WHERE name_en = 'Jordan Charity Association'",
+        ))
+        ngo_id = ngo_result.scalar()
+        print("  + 1 NGO partner")
 
         # ── Users ─────────────────────────────────────────────────
         users = [
-            (ADMIN_ID, "+962790000001", "مدير النظام", "System Admin", "super_admin", "verified", 1000, "elite"),
-            (SELLER_1_ID, "+962790000002", "أحمد البائع", "Ahmed Seller", "seller", "verified", 750, "pro"),
-            (SELLER_2_ID, "+962790000003", "سارة التاجرة", "Sara ProSeller", "pro_seller", "verified", 850, "elite"),
-            (BUYER_1_ID, "+962790000004", "محمد المشتري", "Mohammed Buyer", "buyer", "verified", 500, "trusted"),
-            (BUYER_2_ID, "+962790000005", "ليلى المزايدة", "Layla Bidder", "buyer", "verified", 600, "trusted"),
-            (MEDIATOR_ID, "+962790000006", "خالد الوسيط", "Khaled Mediator", "mediator", "verified", 900, "elite"),
+            # (id, phone, name_ar, name_en, role, status, kyc, ats, is_pro)
+            (ADMIN_ID, "+962790000001", "مدير النظام", "System Admin",
+             "superadmin", "active", "verified", 1000, False),
+            (SELLER_1_ID, "+962790000002", "أحمد البائع", "Ahmed Seller",
+             "seller", "active", "verified", 750, False),
+            (SELLER_2_ID, "+962790000003", "سارة التاجرة", "Sara ProSeller",
+             "seller", "active", "verified", 850, True),
+            (BUYER_1_ID, "+962790000004", "محمد المشتري", "Mohammed Buyer",
+             "buyer", "active", "verified", 500, False),
+            (BUYER_2_ID, "+962790000005", "ليلى المزايدة", "Layla Bidder",
+             "buyer", "active", "verified", 600, False),
+            (MEDIATOR_ID, "+962790000006", "خالد الوسيط", "Khaled Admin",
+             "admin", "active", "verified", 900, False),
         ]
-        for uid, phone, name_ar, name_en, role, kyc, ats, tier in users:
+        for uid, phone, name_ar, name_en, role, st, kyc, ats, is_pro in users:
             await db.execute(text("""
-                INSERT INTO users (id, phone, full_name_ar, full_name_en, role, kyc_status, ats_score, ats_tier)
-                VALUES (:id, :phone, :name_ar, :name_en, :role::user_role, :kyc::kyc_status, :ats, :tier::ats_tier)
+                INSERT INTO users
+                    (id, phone, full_name_ar, full_name, role, status,
+                     kyc_status, ats_score, phone_verified, is_pro_seller,
+                     fcm_tokens, preferred_language)
+                VALUES
+                    (:id, :phone, :name_ar, :name_en,
+                     :role::user_role, :status::user_status, :kyc::kyc_status,
+                     :ats, true, :is_pro, '[]'::jsonb, 'ar')
             """), {
-                "id": uid, "phone": phone, "name_ar": name_ar, "name_en": name_en,
-                "role": role, "kyc": kyc, "ats": ats, "tier": tier,
+                "id": uid, "phone": phone, "name_ar": name_ar,
+                "name_en": name_en, "role": role, "status": st,
+                "kyc": kyc, "ats": ats, "is_pro": is_pro,
             })
-        print(f"  ✓ {len(users)} users (admin, 2 sellers, 2 buyers, mediator)")
+        print(f"  + {len(users)} users (superadmin, 2 sellers, 2 buyers, 1 admin)")
 
-        # ── Listings ──────────────────────────────────────────────
-        listing_1_id = _uuid()  # Active phone listing
-        listing_2_id = _uuid()  # Active car listing
-        listing_3_id = _uuid()  # Ended laptop listing (sold)
+        # ── Listings (prices in INTEGER cents) ────────────────────
+        listing_1_id = _uuid()  # Active phone auction
+        listing_2_id = _uuid()  # Active car auction
+        listing_3_id = _uuid()  # Ended laptop (sold)
         listing_4_id = _uuid()  # Charity listing
         listing_5_id = _uuid()  # Draft listing
 
@@ -144,13 +174,17 @@ async def seed():
                 "description_ar": "آيفون 15 برو ماكس 256 جيجا، لون تيتانيوم طبيعي، جديد مغلف بالكرتونة الأصلية",
                 "description_en": "iPhone 15 Pro Max 256GB, Natural Titanium, brand new sealed in original box",
                 "category_id": 13,
-                "condition": "new",
-                "starting_price": "350.000",
-                "reserve_price": "400.000",
-                "buy_it_now_price": "500.000",
+                "condition": "brand_new",
+                "starting_price": 350000,  # 350 JOD
+                "reserve_price": 400000,
+                "buy_it_now_price": 500000,
+                "current_price": 385000,
+                "bid_count": 3,
                 "status": "active",
-                "image_urls": "{https://placeholder.dev/phone1.jpg,https://placeholder.dev/phone2.jpg}",
-                "published_at": str(NOW - timedelta(hours=2)),
+                "starts_at": NOW - timedelta(hours=2),
+                "ends_at": NOW + timedelta(hours=22),
+                "is_charity": False,
+                "ngo_id": None,
             },
             {
                 "id": listing_2_id,
@@ -158,15 +192,19 @@ async def seed():
                 "title_ar": "مرسيدس C200 موديل 2022 - حالة ممتازة",
                 "title_en": "Mercedes C200 2022 - Excellent Condition",
                 "description_ar": "مرسيدس C200 AMG لاين، 30,000 كم فقط، فحص كامل، بدون حوادث",
-                "description_en": "Mercedes C200 AMG Line, only 30,000 km, full inspection, accident-free",
+                "description_en": "Mercedes C200 AMG Line, only 30k km, full inspection, accident-free",
                 "category_id": 18,
                 "condition": "like_new",
-                "starting_price": "18000.000",
-                "reserve_price": "22000.000",
+                "starting_price": 18000000,  # 18,000 JOD
+                "reserve_price": 22000000,
                 "buy_it_now_price": None,
+                "current_price": 19500000,
+                "bid_count": 2,
                 "status": "active",
-                "image_urls": "{https://placeholder.dev/car1.jpg,https://placeholder.dev/car2.jpg,https://placeholder.dev/car3.jpg}",
-                "published_at": str(NOW - timedelta(hours=6)),
+                "starts_at": NOW - timedelta(hours=6),
+                "ends_at": NOW + timedelta(hours=18),
+                "is_charity": False,
+                "ngo_id": None,
             },
             {
                 "id": listing_3_id,
@@ -177,12 +215,16 @@ async def seed():
                 "description_en": "MacBook Pro 14-inch, M3 chip, 16GB RAM, 512GB SSD, Apple warranty active",
                 "category_id": 14,
                 "condition": "like_new",
-                "starting_price": "550.000",
-                "reserve_price": "650.000",
+                "starting_price": 550000,  # 550 JOD
+                "reserve_price": 650000,
                 "buy_it_now_price": None,
-                "status": "sold",
-                "image_urls": "{https://placeholder.dev/laptop1.jpg,https://placeholder.dev/laptop2.jpg}",
-                "published_at": str(NOW - timedelta(days=3)),
+                "current_price": 700000,
+                "bid_count": 7,
+                "status": "ended",
+                "starts_at": NOW - timedelta(days=3),
+                "ends_at": NOW - timedelta(days=2),
+                "is_charity": False,
+                "ngo_id": None,
             },
             {
                 "id": listing_4_id,
@@ -190,17 +232,19 @@ async def seed():
                 "title_ar": "لوحة فنية أصلية - لصالح جمعية الخير",
                 "title_en": "Original Art Painting - Charity Auction",
                 "description_ar": "لوحة زيتية أصلية للفنان الأردني سامي، العائدات لصالح جمعية الخير الأردنية",
-                "description_en": "Original oil painting by Jordanian artist Sami, proceeds go to Jordan Charity Association",
+                "description_en": "Original oil painting by Jordanian artist Sami, proceeds go to Jordan Charity",
                 "category_id": 9,
-                "condition": "new",
-                "starting_price": "50.000",
+                "condition": "brand_new",
+                "starting_price": 50000,  # 50 JOD
                 "reserve_price": None,
                 "buy_it_now_price": None,
+                "current_price": 75000,
+                "bid_count": 2,
                 "status": "active",
-                "image_urls": "{https://placeholder.dev/art1.jpg}",
-                "published_at": str(NOW - timedelta(hours=1)),
+                "starts_at": NOW - timedelta(hours=1),
+                "ends_at": NOW + timedelta(hours=23),
                 "is_charity": True,
-                "ngo_id": NGO_ID,
+                "ngo_id": ngo_id,
             },
             {
                 "id": listing_5_id,
@@ -208,223 +252,284 @@ async def seed():
                 "title_ar": "بلايستيشن 5 مع ألعاب",
                 "title_en": "PlayStation 5 with Games",
                 "description_ar": "بلايستيشن 5 ديجيتال إيديشن مع 5 ألعاب",
-                "description_en": "PS5 Digital Edition with 5 games",
+                "description_en": "PS5 Digital Edition with 5 games bundle",
                 "category_id": 17,
                 "condition": "good",
-                "starting_price": "150.000",
+                "starting_price": 150000,  # 150 JOD
                 "reserve_price": None,
                 "buy_it_now_price": None,
+                "current_price": None,
+                "bid_count": 0,
                 "status": "draft",
-                "image_urls": "{https://placeholder.dev/ps5.jpg}",
-                "published_at": None,
+                "starts_at": NOW + timedelta(hours=1),
+                "ends_at": NOW + timedelta(hours=25),
+                "is_charity": False,
+                "ngo_id": None,
             },
         ]
 
         for lst in listings:
-            is_charity = lst.pop("is_charity", False)
-            ngo_id = lst.pop("ngo_id", None)
             await db.execute(text("""
                 INSERT INTO listings
                     (id, seller_id, title_ar, title_en, description_ar, description_en,
-                     category_id, condition, starting_price, reserve_price, buy_it_now_price,
-                     status, image_urls, published_at, is_charity, ngo_id)
+                     category_id, condition, starting_price, reserve_price,
+                     buy_it_now_price, current_price, bid_count,
+                     status, starts_at, ends_at, is_charity, ngo_id,
+                     moderation_status, min_increment, location_country)
                 VALUES
                     (:id, :seller_id, :title_ar, :title_en, :description_ar, :description_en,
-                     :category_id, :condition::item_condition, :starting_price, :reserve_price,
-                     :buy_it_now_price, :status::listing_status,
-                     :image_urls, :published_at::timestamptz,
-                     :is_charity, :ngo_id)
-            """), {**lst, "is_charity": is_charity, "ngo_id": ngo_id})
-        print(f"  ✓ {len(listings)} listings (3 active, 1 sold, 1 draft)")
+                     :category_id, :condition::listing_condition,
+                     :starting_price, :reserve_price, :buy_it_now_price,
+                     :current_price, :bid_count,
+                     :status::listing_status, :starts_at, :ends_at,
+                     :is_charity, :ngo_id,
+                     'approved', 2500, 'JO')
+            """), lst)
+        print(f"  + {len(listings)} listings (3 active, 1 ended, 1 draft)")
 
-        # ── Auctions ──────────────────────────────────────────────
+        # ── Listing Images ────────────────────────────────────────
+        listing_images = [
+            (listing_1_id, "listings/phone1.webp", 0),
+            (listing_1_id, "listings/phone2.webp", 1),
+            (listing_2_id, "listings/car1.webp", 0),
+            (listing_2_id, "listings/car2.webp", 1),
+            (listing_2_id, "listings/car3.webp", 2),
+            (listing_3_id, "listings/laptop1.webp", 0),
+            (listing_3_id, "listings/laptop2.webp", 1),
+            (listing_4_id, "listings/art1.webp", 0),
+            (listing_5_id, "listings/ps5.webp", 0),
+        ]
+        for listing_id, s3_key, order in listing_images:
+            await db.execute(text("""
+                INSERT INTO listing_images (id, listing_id, s3_key, display_order)
+                VALUES (gen_random_uuid(), :listing_id, :s3_key, :order)
+            """), {"listing_id": listing_id, "s3_key": s3_key, "order": order})
+        print(f"  + {len(listing_images)} listing images")
+
+        # ── Auctions (match migration schema) ─────────────────────
         auction_1_id = _uuid()  # Active phone auction
         auction_2_id = _uuid()  # Active car auction
-        auction_3_id = _uuid()  # Ended laptop auction (won by buyer_1)
+        auction_3_id = _uuid()  # Ended laptop auction
         auction_4_id = _uuid()  # Active charity auction
 
         auctions = [
             {
                 "id": auction_1_id,
                 "listing_id": listing_1_id,
+                "seller_id": SELLER_1_ID,
                 "status": "active",
-                "starts_at": str(NOW - timedelta(hours=2)),
-                "ends_at": str(NOW + timedelta(hours=22)),
-                "current_price": "385.000",
-                "min_increment": "5.000",
-                "bid_count": 3,
+                "started_at": NOW - timedelta(hours=2),
+                "ended_at": None,
+                "final_price": None,
+                "winner_id": None,
             },
             {
                 "id": auction_2_id,
                 "listing_id": listing_2_id,
+                "seller_id": SELLER_2_ID,
                 "status": "active",
-                "starts_at": str(NOW - timedelta(hours=6)),
-                "ends_at": str(NOW + timedelta(days=2)),
-                "current_price": "19500.000",
-                "min_increment": "250.000",
-                "bid_count": 2,
+                "started_at": NOW - timedelta(hours=6),
+                "ended_at": None,
+                "final_price": None,
+                "winner_id": None,
             },
             {
                 "id": auction_3_id,
                 "listing_id": listing_3_id,
+                "seller_id": SELLER_1_ID,
                 "status": "ended",
-                "starts_at": str(NOW - timedelta(days=3)),
-                "ends_at": str(NOW - timedelta(days=1)),
-                "current_price": "700.000",
-                "min_increment": "10.000",
-                "bid_count": 7,
+                "started_at": NOW - timedelta(days=3),
+                "ended_at": NOW - timedelta(days=2),
+                "final_price": 700000,  # 700 JOD in cents
                 "winner_id": BUYER_1_ID,
-                "final_price": "700.000",
-                "reserve_met": True,
             },
             {
                 "id": auction_4_id,
                 "listing_id": listing_4_id,
+                "seller_id": SELLER_2_ID,
                 "status": "active",
-                "starts_at": str(NOW - timedelta(hours=1)),
-                "ends_at": str(NOW + timedelta(days=3)),
-                "current_price": "75.000",
-                "min_increment": "5.000",
-                "bid_count": 2,
+                "started_at": NOW - timedelta(hours=1),
+                "ended_at": None,
+                "final_price": None,
+                "winner_id": None,
             },
         ]
 
         for auc in auctions:
-            winner_id = auc.pop("winner_id", None)
-            final_price = auc.pop("final_price", None)
-            reserve_met = auc.pop("reserve_met", None)
             await db.execute(text("""
                 INSERT INTO auctions
-                    (id, listing_id, status, starts_at, ends_at, current_price,
-                     min_increment, bid_count, winner_id, final_price, reserve_met)
+                    (id, listing_id, seller_id, status, started_at, ended_at,
+                     final_price, winner_id)
                 VALUES
-                    (:id, :listing_id, :status::auction_status,
-                     :starts_at::timestamptz, :ends_at::timestamptz,
-                     :current_price, :min_increment, :bid_count,
-                     :winner_id, :final_price, :reserve_met)
-            """), {
-                **auc, "winner_id": winner_id,
-                "final_price": final_price, "reserve_met": reserve_met,
-            })
-        print(f"  ✓ {len(auctions)} auctions (3 active, 1 ended)")
+                    (:id, :listing_id, :seller_id, :status::auction_status,
+                     :started_at, :ended_at, :final_price, :winner_id)
+            """), auc)
+        print(f"  + {len(auctions)} auctions (3 active, 1 ended)")
 
-        # ── Bids (append-only) ────────────────────────────────────
+        # ── Bids (append-only, INTEGER cents, migration columns) ──
         bids = [
-            # Phone auction bids
-            (auction_1_id, BUYER_1_ID, "360.000", NOW - timedelta(hours=1, minutes=30)),
-            (auction_1_id, BUYER_2_ID, "370.000", NOW - timedelta(hours=1)),
-            (auction_1_id, BUYER_1_ID, "385.000", NOW - timedelta(minutes=30)),
-            # Car auction bids
-            (auction_2_id, BUYER_1_ID, "18500.000", NOW - timedelta(hours=4)),
-            (auction_2_id, BUYER_2_ID, "19500.000", NOW - timedelta(hours=2)),
-            # Laptop auction bids (ended)
-            (auction_3_id, BUYER_1_ID, "570.000", NOW - timedelta(days=2, hours=20)),
-            (auction_3_id, BUYER_2_ID, "600.000", NOW - timedelta(days=2, hours=16)),
-            (auction_3_id, BUYER_1_ID, "630.000", NOW - timedelta(days=2, hours=12)),
-            (auction_3_id, BUYER_2_ID, "650.000", NOW - timedelta(days=2, hours=8)),
-            (auction_3_id, BUYER_1_ID, "670.000", NOW - timedelta(days=2, hours=4)),
-            (auction_3_id, BUYER_2_ID, "690.000", NOW - timedelta(days=1, hours=12)),
-            (auction_3_id, BUYER_1_ID, "700.000", NOW - timedelta(days=1, hours=6)),
-            # Charity auction bids
-            (auction_4_id, BUYER_2_ID, "60.000", NOW - timedelta(minutes=45)),
-            (auction_4_id, BUYER_1_ID, "75.000", NOW - timedelta(minutes=20)),
+            # (listing_id, auction_id, bidder_id, amount_cents, is_proxy, created_at)
+            # Phone auction
+            (listing_1_id, auction_1_id, BUYER_1_ID, 360000, False,
+             NOW - timedelta(hours=1, minutes=30)),
+            (listing_1_id, auction_1_id, BUYER_2_ID, 370000, False,
+             NOW - timedelta(hours=1)),
+            (listing_1_id, auction_1_id, BUYER_1_ID, 385000, False,
+             NOW - timedelta(minutes=30)),
+            # Car auction
+            (listing_2_id, auction_2_id, BUYER_1_ID, 18500000, False,
+             NOW - timedelta(hours=4)),
+            (listing_2_id, auction_2_id, BUYER_2_ID, 19500000, False,
+             NOW - timedelta(hours=2)),
+            # Laptop auction (ended)
+            (listing_3_id, auction_3_id, BUYER_1_ID, 570000, False,
+             NOW - timedelta(days=2, hours=20)),
+            (listing_3_id, auction_3_id, BUYER_2_ID, 600000, False,
+             NOW - timedelta(days=2, hours=16)),
+            (listing_3_id, auction_3_id, BUYER_1_ID, 630000, False,
+             NOW - timedelta(days=2, hours=12)),
+            (listing_3_id, auction_3_id, BUYER_2_ID, 650000, False,
+             NOW - timedelta(days=2, hours=8)),
+            (listing_3_id, auction_3_id, BUYER_1_ID, 670000, False,
+             NOW - timedelta(days=2, hours=4)),
+            (listing_3_id, auction_3_id, BUYER_2_ID, 690000, False,
+             NOW - timedelta(days=1, hours=12)),
+            (listing_3_id, auction_3_id, BUYER_1_ID, 700000, False,
+             NOW - timedelta(days=1, hours=6)),
+            # Charity auction
+            (listing_4_id, auction_4_id, BUYER_2_ID, 60000, False,
+             NOW - timedelta(minutes=45)),
+            (listing_4_id, auction_4_id, BUYER_1_ID, 75000, False,
+             NOW - timedelta(minutes=20)),
         ]
 
-        for auction_id, user_id, amount, created_at in bids:
+        for listing_id, auction_id, bidder_id, amount, is_proxy, created_at in bids:
             await db.execute(text("""
-                INSERT INTO bids (id, auction_id, user_id, amount, created_at)
-                VALUES (:id, :auction_id, :user_id, :amount, :created_at)
+                INSERT INTO bids
+                    (id, listing_id, auction_id, bidder_id, amount,
+                     status, is_proxy, created_at)
+                VALUES
+                    (:id, :listing_id, :auction_id, :bidder_id, :amount,
+                     'accepted'::bid_status, :is_proxy, :created_at)
             """), {
-                "id": _uuid(), "auction_id": auction_id,
-                "user_id": user_id, "amount": amount,
-                "created_at": str(created_at),
+                "id": _uuid(), "listing_id": listing_id,
+                "auction_id": auction_id, "bidder_id": bidder_id,
+                "amount": amount, "is_proxy": is_proxy,
+                "created_at": created_at,
             })
-        print(f"  ✓ {len(bids)} bids across 4 auctions")
+        print(f"  + {len(bids)} bids across 4 auctions")
 
-        # ── Escrow (for ended laptop auction) ─────────────────────
+        # ── Escrow (ended laptop auction, INTEGER cents) ──────────
         escrow_id = _uuid()
+        platform_fee = 35000    # 5% of 700 JOD = 35 JOD
+        seller_payout = 665000  # 700 - 35 = 665 JOD
+
         await db.execute(text("""
             INSERT INTO escrows
-                (id, auction_id, winner_id, seller_id, state, amount, currency,
-                 seller_amount, payment_deadline, shipping_deadline)
+                (id, auction_id, listing_id, buyer_id, seller_id,
+                 amount, platform_fee, seller_payout,
+                 state, payment_deadline, shipping_deadline)
             VALUES
-                (:id, :auction_id, :winner_id, :seller_id, 'funds_held'::escrow_state,
-                 :amount, 'JOD', :seller_amount, :pay_dl, :ship_dl)
+                (:id, :auction_id, :listing_id, :buyer_id, :seller_id,
+                 :amount, :platform_fee, :seller_payout,
+                 'shipping_requested'::escrow_status,
+                 :pay_dl, :ship_dl)
         """), {
             "id": escrow_id,
             "auction_id": auction_3_id,
-            "winner_id": BUYER_1_ID,
+            "listing_id": listing_3_id,
+            "buyer_id": BUYER_1_ID,
             "seller_id": SELLER_1_ID,
-            "amount": "700.000",
-            "seller_amount": "665.000",  # 5% platform fee
-            "pay_dl": str(NOW - timedelta(days=1, hours=12)),
-            "ship_dl": str(NOW + timedelta(days=2)),
+            "amount": 700000,
+            "platform_fee": platform_fee,
+            "seller_payout": seller_payout,
+            "pay_dl": NOW - timedelta(days=1, hours=12),
+            "ship_dl": NOW + timedelta(days=2),
         })
 
-        # Escrow events — audit trail
+        # Escrow events — append-only audit trail
         events = [
-            ("initiated", "payment_pending", "system", "auction_ended", NOW - timedelta(days=1)),
-            ("payment_pending", "funds_held", "buyer", "payment_confirmed", NOW - timedelta(days=1, hours=-6)),
-            ("funds_held", "shipping_requested", "system", "payment_cleared", NOW - timedelta(hours=18)),
+            ("payment_pending", "funds_held", BUYER_1_ID, "buyer",
+             "payment_confirmed", NOW - timedelta(days=1)),
+            ("funds_held", "shipping_requested", None, "system",
+             "payment_cleared", NOW - timedelta(hours=18)),
         ]
-        for from_s, to_s, actor_type, trigger, created_at in events:
-            actor_id = BUYER_1_ID if actor_type == "buyer" else None
+        for from_s, to_s, actor_id, actor_type, trigger, created_at in events:
             await db.execute(text("""
                 INSERT INTO escrow_events
-                    (id, escrow_id, from_state, to_state, actor_id, actor_type, trigger, created_at)
+                    (id, escrow_id, from_state, to_state,
+                     actor_id, actor_type, trigger, metadata, created_at)
                 VALUES
-                    (:id, :escrow_id, :from_s, :to_s, :actor_id, :actor_type::actor_type, :trigger, :created_at)
+                    (:id, :escrow_id,
+                     :from_s::escrow_status, :to_s::escrow_status,
+                     :actor_id, :actor_type, :trigger,
+                     '{}'::jsonb, :created_at)
             """), {
                 "id": _uuid(), "escrow_id": escrow_id,
                 "from_s": from_s, "to_s": to_s,
                 "actor_id": actor_id, "actor_type": actor_type,
-                "trigger": trigger, "created_at": str(created_at),
+                "trigger": trigger, "created_at": created_at,
             })
-        print(f"  ✓ 1 escrow (funds_held) with {len(events)} events")
+        print(f"  + 1 escrow (shipping_requested) with {len(events)} events")
 
         # ── Notification preferences ──────────────────────────────
-        for uid in [ADMIN_ID, SELLER_1_ID, SELLER_2_ID, BUYER_1_ID, BUYER_2_ID, MEDIATOR_ID]:
+        for uid in [ADMIN_ID, SELLER_1_ID, SELLER_2_ID,
+                    BUYER_1_ID, BUYER_2_ID, MEDIATOR_ID]:
             await db.execute(text("""
                 INSERT INTO notification_preferences (id, user_id)
                 VALUES (:id, :user_id)
             """), {"id": _uuid(), "user_id": uid})
-        print("  ✓ 6 notification preferences (defaults)")
+        print("  + 6 notification preferences (defaults)")
 
         # ── Sample notifications ──────────────────────────────────
         notifications = [
-            (BUYER_1_ID, "in_app", "تم تأكيد مزايدتك", "Bid Confirmed",
+            (BUYER_1_ID, "new_bid", listing_1_id, "listing",
+             "تم تأكيد مزايدتك", "Bid Confirmed",
              "تم تأكيد مزايدتك بقيمة 385 د.أ على آيفون 15 برو ماكس",
              "Your bid of 385 JOD on iPhone 15 Pro Max has been confirmed"),
-            (SELLER_1_ID, "in_app", "مزايدة جديدة", "New Bid",
+            (SELLER_1_ID, "new_bid", listing_1_id, "listing",
+             "مزايدة جديدة", "New Bid",
              "مزايدة جديدة على آيفون 15 برو ماكس بقيمة 385 د.أ",
              "New bid of 385 JOD on your iPhone 15 Pro Max listing"),
-            (BUYER_1_ID, "in_app", "فزت بالمزاد!", "You Won!",
+            (BUYER_1_ID, "won", listing_3_id, "listing",
+             "فزت بالمزاد!", "You Won!",
              "مبروك! فزت بمزاد ماك بوك برو M3 بقيمة 700 د.أ",
              "Congratulations! You won the MacBook Pro M3 auction for 700 JOD"),
         ]
-        for user_id, channel, title_ar, title_en, body_ar, body_en in notifications:
+        for user_id, event, entity_id, entity_type, t_ar, t_en, b_ar, b_en in notifications:
             await db.execute(text("""
                 INSERT INTO notifications
-                    (id, user_id, channel, title_ar, title_en, body_ar, body_en)
+                    (id, user_id, event_type, entity_id, entity_type,
+                     title_ar, title_en, body_ar, body_en)
                 VALUES
-                    (:id, :user_id, :channel::notification_channel,
-                     :title_ar, :title_en, :body_ar, :body_en)
+                    (:id, :user_id, :event::notification_event,
+                     :entity_id, :entity_type,
+                     :t_ar, :t_en, :b_ar, :b_en)
             """), {
-                "id": _uuid(), "user_id": user_id, "channel": channel,
-                "title_ar": title_ar, "title_en": title_en,
-                "body_ar": body_ar, "body_en": body_en,
+                "id": _uuid(), "user_id": user_id, "event": event,
+                "entity_id": entity_id, "entity_type": entity_type,
+                "t_ar": t_ar, "t_en": t_en, "b_ar": b_ar, "b_en": b_en,
             })
-        print(f"  ✓ {len(notifications)} notifications")
+        print(f"  + {len(notifications)} notifications")
 
         # ── Admin audit log ───────────────────────────────────────
         await db.execute(text("""
-            INSERT INTO admin_audit_log (id, admin_id, action, target_type, target_id, ip_address)
-            VALUES (:id, :admin_id, 'seed_database', 'system', null, '127.0.0.1')
+            INSERT INTO admin_audit_log
+                (id, admin_id, action, entity_type, entity_id, ip_address)
+            VALUES
+                (:id, :admin_id, 'seed_database', 'system', null, '127.0.0.1'::inet)
         """), {"id": _uuid(), "admin_id": ADMIN_ID})
-        print("  ✓ 1 admin audit log entry")
+        print("  + 1 admin audit log entry")
 
         await db.commit()
-        print("\nDatabase seeded successfully.")
+        print("\nDatabase seeded successfully!")
+        print(f"\nDev accounts (all phone-verified, KYC approved):")
+        print(f"  Admin:    +962790000001")
+        print(f"  Seller 1: +962790000002 (Ahmed)")
+        print(f"  Seller 2: +962790000003 (Sara, Pro Seller)")
+        print(f"  Buyer 1:  +962790000004 (Mohammed)")
+        print(f"  Buyer 2:  +962790000005 (Layla)")
+        print(f"  Mediator: +962790000006 (Khaled)")
 
     await engine.dispose()
 

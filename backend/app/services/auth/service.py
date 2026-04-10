@@ -9,25 +9,27 @@ Redis key layout (SDD §4.3):
   otp:attempts:{phone}   — verify attempt counter, STR, TTL 5min
   otp:lockout:{phone}    — lockout flag, STR, TTL 15min
   rate:otp:{phone}       — hourly OTP request counter, STR, TTL 1h
-  session:{sha256(token)} — user_id, STR, TTL 30d
   blacklist:{jti}        — "1", STR, TTL = remaining JWT validity
 """
 
 from __future__ import annotations
 
+import hmac
 import logging
 import secrets
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from uuid import uuid4
 
-import phonenumbers
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token
-from app.services.auth.models import ATSTier, KYCStatus, User, UserRole
+from app.services.auth.models import (
+    KYCStatus, RefreshToken, User, UserRole, UserStatus,
+)
 from app.services.auth.sms import send_sms
 
 logger = logging.getLogger(__name__)
@@ -37,17 +39,12 @@ OTP_KEY = "otp:{phone}"
 OTP_ATTEMPTS_KEY = "otp:attempts:{phone}"
 OTP_LOCKOUT_KEY = "otp:lockout:{phone}"
 OTP_RATE_KEY = "rate:otp:{phone}"
-SESSION_KEY = "session:{hash}"
 BLACKLIST_KEY = "blacklist:{jti}"
 
 
-def _country_code_from_phone(phone: str) -> str:
-    """Extract ISO 3166-1 alpha-2 country code from E.164 phone."""
-    try:
-        parsed = phonenumbers.parse(phone, None)
-        return phonenumbers.region_code_for_number(parsed) or "JO"
-    except phonenumbers.NumberParseException:
-        return "JO"
+def _phone_last4(phone: str) -> str:
+    """Return last 4 digits for structured logging (PII-safe)."""
+    return phone[-4:] if len(phone) >= 4 else phone
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -89,9 +86,12 @@ async def send_otp(phone: str, redis: Redis) -> tuple[bool, str | None, dict | N
 
     Returns (success, error_code, error_detail).
     """
+    last4 = _phone_last4(phone)
+
     # Check lockout first
     locked, lockout_ttl = await check_otp_lockout(phone, redis)
     if locked:
+        logger.info("otp_send_blocked phone_last4=%s reason=lockout", last4)
         return False, "OTP_LOCKED_OUT", {
             "code": "OTP_LOCKED_OUT",
             "message_en": "Account locked due to too many failed attempts. Try again later.",
@@ -102,6 +102,7 @@ async def send_otp(phone: str, redis: Redis) -> tuple[bool, str | None, dict | N
     # Check rate limit (5 per hour)
     allowed, rate_ttl = await check_otp_rate_limit(phone, redis)
     if not allowed:
+        logger.info("otp_send_blocked phone_last4=%s reason=rate_limit", last4)
         return False, "OTP_RATE_LIMITED", {
             "code": "OTP_RATE_LIMITED",
             "message_en": "Too many OTP requests. Try again later.",
@@ -109,8 +110,8 @@ async def send_otp(phone: str, redis: Redis) -> tuple[bool, str | None, dict | N
             "retry_after_seconds": rate_ttl,
         }
 
-    # Generate 6-digit OTP
-    otp = f"{secrets.randbelow(900000) + 100000}"
+    # Generate 6-digit OTP (zero-padded)
+    otp = f"{secrets.randbelow(1000000):06d}"
     otp_hash = sha256(otp.encode()).hexdigest()
 
     # Store hash in Redis with 5-min TTL
@@ -125,10 +126,9 @@ async def send_otp(phone: str, redis: Redis) -> tuple[bool, str | None, dict | N
     message = f"MZADAK: Your verification code is: {otp}"
     sent = await send_sms(phone, message)
     if not sent:
-        logger.error("Failed to send OTP SMS to %s via all providers", phone)
-        # Still return success — OTP is stored, user can retry
-        # In production, would queue for retry
+        logger.error("otp_sms_failed phone_last4=%s providers=all", last4)
 
+    logger.info("otp_sent phone_last4=%s", last4)
     return True, None, None
 
 
@@ -140,11 +140,13 @@ async def send_otp(phone: str, redis: Redis) -> tuple[bool, str | None, dict | N
 async def verify_otp(
     phone: str, otp: str, redis: Redis,
 ) -> tuple[bool, str | None, dict | None]:
-    """Verify OTP against stored hash.
+    """Verify OTP against stored hash using constant-time comparison.
 
     FR-AUTH-001: Max 3 attempts, then 15-min lockout.
     Returns (success, error_code, error_detail).
     """
+    last4 = _phone_last4(phone)
+
     # Check lockout
     locked, lockout_ttl = await check_otp_lockout(phone, redis)
     if locked:
@@ -170,12 +172,10 @@ async def verify_otp(
 
     # Check if max attempts exceeded → lockout
     if attempts > settings.OTP_MAX_VERIFY_ATTEMPTS:
-        # Set lockout
         lockout_key = OTP_LOCKOUT_KEY.format(phone=phone)
         await redis.setex(lockout_key, settings.OTP_LOCKOUT_SECONDS, "1")
-        # Clear OTP and attempts
         await redis.delete(otp_key, attempts_key)
-        logger.warning("AUTH-OTP-LOCKOUT: phone=%s after %d attempts", phone, attempts)
+        logger.warning("otp_lockout phone_last4=%s attempts=%d", last4, attempts)
         return False, "OTP_LOCKED_OUT", {
             "code": "OTP_LOCKED_OUT",
             "message_en": "Too many failed attempts. Locked for 15 minutes.",
@@ -183,10 +183,12 @@ async def verify_otp(
             "retry_after_seconds": settings.OTP_LOCKOUT_SECONDS,
         }
 
-    # Verify hash
+    # Constant-time comparison (prevents timing attacks)
     otp_hash = sha256(otp.encode()).hexdigest()
-    if otp_hash != stored_hash:
+    stored = stored_hash if isinstance(stored_hash, str) else stored_hash.decode()
+    if not hmac.compare_digest(otp_hash, stored):
         remaining = settings.OTP_MAX_VERIFY_ATTEMPTS - attempts
+        logger.info("otp_invalid phone_last4=%s remaining=%d", last4, remaining)
         return False, "INVALID_OTP", {
             "code": "INVALID_OTP",
             "message_en": f"Invalid OTP. {remaining} attempt(s) remaining.",
@@ -196,6 +198,7 @@ async def verify_otp(
 
     # Success — clean up Redis
     await redis.delete(otp_key, attempts_key)
+    logger.info("otp_verified phone_last4=%s", last4)
 
     return True, None, None
 
@@ -206,37 +209,48 @@ async def verify_otp(
 
 
 async def get_or_create_user(phone: str, db: AsyncSession) -> tuple[User, bool]:
-    """Load existing user or create a new one (PENDING_KYC, ats_score=400).
+    """Load existing user or create a new one with SELECT FOR UPDATE.
 
     Returns (user, is_new).
+    Raises ValueError if user is banned.
     """
-    result = await db.execute(select(User).where(User.phone == phone))
+    # SELECT FOR UPDATE prevents race on concurrent OTP verifies
+    result = await db.execute(
+        select(User).where(User.phone == phone).with_for_update()
+    )
     user = result.scalar_one_or_none()
-    if user:
-        return user, False
 
-    country = _country_code_from_phone(phone)
-    lang = "ar" if country == "JO" else "ar"
+    if user:
+        # Check banned status
+        if user.is_banned:
+            raise ValueError("ACCOUNT_BANNED")
+
+        # Update last_login_at
+        user.last_login_at = datetime.now(timezone.utc)
+        user.phone_verified = True
+        await db.flush()
+        return user, False
 
     user = User(
         id=str(uuid4()),
         phone=phone,
-        full_name_ar="",
+        phone_verified=True,
         role=UserRole.BUYER,
-        kyc_status=KYCStatus.PENDING,
+        status=UserStatus.PENDING_KYC,
+        kyc_status=KYCStatus.NOT_STARTED,
         ats_score=400,
-        ats_tier=ATSTier.TRUSTED,
-        country_code=country,
-        preferred_language=lang,
+        preferred_language="ar",
+        last_login_at=datetime.now(timezone.utc),
+        fcm_tokens=[],
+        is_pro_seller=False,
     )
     db.add(user)
     await db.flush()
-    await db.commit()
     return user, True
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Token issuance & management
+# Token issuance & management (DB-based refresh tokens)
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -260,33 +274,70 @@ def issue_tokens(user: User) -> tuple[str, str, str]:
 
 
 async def store_refresh_token(
-    refresh_token: str, user_id: str, redis: Redis,
+    refresh_token: str, user_id: str, db: AsyncSession,
+    device_info: dict | None = None,
 ) -> None:
-    """Store SHA-256(refresh_token) → user_id in Redis with 30-day TTL."""
+    """Store SHA-256(refresh_token) in refresh_tokens table."""
     token_hash = sha256(refresh_token.encode()).hexdigest()
-    await redis.setex(
-        f"session:{token_hash}",
-        settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
-        user_id,
+    rt = RefreshToken(
+        id=str(uuid4()),
+        user_id=user_id,
+        token_hash=token_hash,
+        expires_at=datetime.now(timezone.utc) + timedelta(
+            days=settings.REFRESH_TOKEN_EXPIRE_DAYS,
+        ),
+        device_info=device_info,
     )
+    db.add(rt)
+    await db.flush()
 
 
 async def validate_refresh_token(
-    refresh_token: str, redis: Redis,
+    refresh_token: str, db: AsyncSession,
 ) -> str | None:
-    """Return user_id if the refresh token is valid, else None."""
+    """Return user_id if the refresh token is valid and not revoked/expired."""
     token_hash = sha256(refresh_token.encode()).hexdigest()
-    return await redis.get(f"session:{token_hash}")
+    result = await db.execute(
+        select(RefreshToken).where(
+            RefreshToken.token_hash == token_hash,
+            RefreshToken.revoked_at.is_(None),
+            RefreshToken.expires_at > datetime.now(timezone.utc),
+        )
+    )
+    rt = result.scalar_one_or_none()
+    return rt.user_id if rt else None
 
 
-async def revoke_refresh_token(refresh_token: str, redis: Redis) -> None:
-    """Delete refresh token hash from Redis (FR-AUTH-004)."""
+async def revoke_refresh_token(refresh_token: str, db: AsyncSession) -> None:
+    """Soft-revoke a refresh token by setting revoked_at."""
     token_hash = sha256(refresh_token.encode()).hexdigest()
-    await redis.delete(f"session:{token_hash}")
+    result = await db.execute(
+        select(RefreshToken).where(RefreshToken.token_hash == token_hash)
+    )
+    rt = result.scalar_one_or_none()
+    if rt:
+        rt.revoked_at = datetime.now(timezone.utc)
+        await db.flush()
+
+
+async def revoke_all_user_tokens(user_id: str, db: AsyncSession) -> int:
+    """Revoke all active refresh tokens for a user. Returns count revoked."""
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(RefreshToken).where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked_at.is_(None),
+        )
+    )
+    tokens = result.scalars().all()
+    for rt in tokens:
+        rt.revoked_at = now
+    await db.flush()
+    return len(tokens)
 
 
 async def blacklist_token(jti: str, ttl_seconds: int, redis: Redis) -> None:
-    """Add token JTI to blacklist with remaining TTL."""
+    """Add token JTI to Redis blacklist with remaining TTL."""
     await redis.setex(f"blacklist:{jti}", ttl_seconds, "1")
 
 

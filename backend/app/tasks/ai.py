@@ -1,7 +1,8 @@
 """
 AI Celery tasks — FR-AI-001 model retraining.
 
-Weekly retrain of the Price Oracle model from ClickHouse data.
+Weekly retrain of per-category Price Oracle XGBoost models.
+Scheduled via Celery Beat: every Monday 3am Amman time (UTC+3 → 00:00 UTC).
 """
 
 from __future__ import annotations
@@ -14,20 +15,25 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="tasks.retrain_price_model", bind=True, max_retries=2)
-def retrain_price_model(self) -> dict:
-    """Weekly retraining of the Price Oracle scikit-learn model.
+def retrain_price_model(self, category_id: int | None = None) -> dict:
+    """Weekly retraining of Price Oracle XGBoost models.
 
-    Fetches completed auction data from ClickHouse (last 365 days),
-    trains a GradientBoostingRegressor, saves to disk.
+    For each category with >= 50 completed auctions:
+    - Pull training data from ClickHouse (all time, up to 100k rows)
+    - Train XGBRegressor (quantile objective)
+    - Save to S3 as models/price_oracle/{category_id}_v{timestamp}.pkl
+    - Update version pointer in Redis
 
-    Phase 1: scikit-learn GradientBoostingRegressor
-    Phase 2: XGBoost
+    If category_id is provided, only trains that specific category.
     """
-    logger.info("Starting weekly price oracle model retrain")
+    logger.info(
+        "Starting price oracle model retrain%s",
+        f" for category {category_id}" if category_id else " (all categories)",
+    )
 
     try:
         from app.services.ai.price_oracle import train_price_model
-        metrics = train_price_model()
+        metrics = train_price_model(target_category_id=category_id)
         logger.info("Price oracle retrain complete: %s", metrics)
         return metrics
     except Exception as exc:

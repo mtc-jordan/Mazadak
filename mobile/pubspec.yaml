@@ -18,7 +18,7 @@ dependencies:
 
   # Networking
   dio: ^5.4.0
-  web_socket_channel: ^3.0.0
+  socket_io_client: ^3.0.2
 
   # Navigation
   go_router: ^14.0.0
@@ -31,13 +31,30 @@ dependencies:
   google_fonts: ^6.2.0
   cached_network_image: ^3.3.0
   cupertino_icons: ^1.0.8
+  shimmer: ^3.0.0
+  flutter_svg: ^2.0.10
+  confetti: ^0.8.0
 
   # Serialization
   freezed_annotation: ^2.4.0
   json_annotation: ^4.9.0
 
   # Localization / Formatting
-  intl: ^0.19.0
+  intl: ^0.20.2
+
+  # Media / Platform
+  image_picker: ^1.1.0
+  url_launcher: ^6.2.0
+  crypto: ^3.0.3
+  local_auth: ^2.3.0
+  package_info_plus: ^8.2.0
+
+  # Push notifications
+  firebase_core: ^3.8.0
+  firebase_messaging: ^15.2.0
+
+  # QR code
+  qr_flutter: ^4.1.0
 
 dev_dependencies:
   flutter_test:
@@ -53,3 +70,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/
+    - assets/icons/

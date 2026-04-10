@@ -1,0 +1,126 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: me-south-1
+  ECR_REPOSITORY: mzadak-api
+  ECS_CLUSTER: mzadak-staging
+  ECS_SERVICE: mzadak-backend-staging
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ── Build & push ──────────────────────────────────────────
+      - name: Build, tag, and push image
+        id: build
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      # ── Database migration ────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install for migration
+        run: pip install -e "."
+
+      - name: Run Alembic migrations (staging DB)
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: alembic upgrade head
+
+      # ── Blue-green deploy ─────────────────────────────────────
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ env.ECS_SERVICE }} \
+            --query taskDefinition \
+            > task-definition.json
+
+      - name: Update task definition image
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: mzadak-backend
+          image: ${{ steps.build.outputs.image }}
+
+      - name: Deploy to ECS (blue-green)
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+          wait-for-minutes: 10
+
+      # ── Smoke tests ───────────────────────────────────────────
+      - name: Smoke tests
+        env:
+          STAGING_URL: ${{ secrets.STAGING_URL }}
+        run: |
+          echo "Running smoke tests against $STAGING_URL"
+
+          # Health check
+          curl -sf "$STAGING_URL/health" | jq -e '.status == "healthy"'
+
+          # Auth endpoint reachable (expect 422 for missing body, not 500)
+          HTTP=$(curl -sf -o /dev/null -w "%{http_code}" \
+            -X POST "$STAGING_URL/api/v1/auth/register" \
+            -H "Content-Type: application/json" \
+            -d '{"phone": "+962790000000"}')
+          [ "$HTTP" -lt 500 ] || (echo "Auth endpoint returned $HTTP" && exit 1)
+
+          # Listings endpoint
+          curl -sf "$STAGING_URL/api/v1/listings" > /dev/null
+
+          # Search suggest endpoint
+          HTTP=$(curl -sf -o /dev/null -w "%{http_code}" \
+            "$STAGING_URL/api/v1/search/suggest?q=iphone")
+          [ "$HTTP" -eq 200 ] || [ "$HTTP" -eq 503 ]
+
+          echo "All smoke tests passed"
+
+      # ── Notify ────────────────────────────────────────────────
+      - name: Notify Slack
+        if: always()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && ':white_check_mark:' || ':x:' }} Staging deploy ${{ job.status }}\nCommit: ${{ github.sha }}\nBy: ${{ github.actor }}\nLogs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

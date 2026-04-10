@@ -51,8 +51,10 @@ class AuctionState {
     this.bidCount = 0,
     this.winnerId,
     this.endsAt,
+    this.timerRemaining,
     this.status = 'unknown',
     this.lastBidder,
+    this.sellerId,
     this.extensionCount = 0,
     this.connectionStatus = ConnectionStatus.disconnected,
     this.error,
@@ -62,6 +64,7 @@ class AuctionState {
     this.listingTitle,
     this.imageUrl,
     this.timerExtended = false,
+    this.watcherCount = 0,
   });
 
   final String? auctionId;
@@ -69,8 +72,10 @@ class AuctionState {
   final int bidCount;
   final String? winnerId;
   final String? endsAt;
+  final int? timerRemaining; // server-provided TTL in seconds
   final String status;
   final String? lastBidder;
+  final String? sellerId;
   final int extensionCount;
   final ConnectionStatus connectionStatus;
   final String? error;
@@ -80,8 +85,13 @@ class AuctionState {
   final String? listingTitle;
   final String? imageUrl;
   final bool timerExtended;
+  final int watcherCount;
 
   bool get isConnected => connectionStatus == ConnectionStatus.connected;
+
+  /// Whether the current user is the seller (cannot bid).
+  bool isSeller(String? currentUserId) =>
+      sellerId != null && sellerId == currentUserId;
 
   AuctionState copyWith({
     String? auctionId,
@@ -89,8 +99,10 @@ class AuctionState {
     int? bidCount,
     String? winnerId,
     String? endsAt,
+    int? timerRemaining,
     String? status,
     String? lastBidder,
+    String? sellerId,
     int? extensionCount,
     ConnectionStatus? connectionStatus,
     String? error,
@@ -100,14 +112,17 @@ class AuctionState {
     String? listingTitle,
     String? imageUrl,
     bool? timerExtended,
+    int? watcherCount,
   }) => AuctionState(
         auctionId: auctionId ?? this.auctionId,
         currentPrice: currentPrice ?? this.currentPrice,
         bidCount: bidCount ?? this.bidCount,
         winnerId: winnerId ?? this.winnerId,
         endsAt: endsAt ?? this.endsAt,
+        timerRemaining: timerRemaining ?? this.timerRemaining,
         status: status ?? this.status,
         lastBidder: lastBidder ?? this.lastBidder,
+        sellerId: sellerId ?? this.sellerId,
         extensionCount: extensionCount ?? this.extensionCount,
         connectionStatus: connectionStatus ?? this.connectionStatus,
         error: error,
@@ -117,6 +132,7 @@ class AuctionState {
         listingTitle: listingTitle ?? this.listingTitle,
         imageUrl: imageUrl ?? this.imageUrl,
         timerExtended: timerExtended ?? this.timerExtended,
+        watcherCount: watcherCount ?? this.watcherCount,
       );
 }
 
@@ -165,7 +181,6 @@ class AuctionNotifier extends StateNotifier<AuctionState> {
     state = state.copyWith(connectionStatus: ConnectionStatus.reconnecting);
     try {
       final stream = await wsClient.connect(auctionId);
-      state = state.copyWith(connectionStatus: ConnectionStatus.connected);
 
       _subscription = stream.listen(
         _onMessage,
@@ -193,9 +208,21 @@ class AuctionNotifier extends StateNotifier<AuctionState> {
     final type = msg['type'] as String? ?? '';
 
     switch (type) {
-      case 'bid_accepted':
-        _handleBidAccepted(msg);
-      case 'anti_snipe':
+      // ── Socket.IO lifecycle events (from WsClient) ──────────
+      case '_connected':
+        state = state.copyWith(connectionStatus: ConnectionStatus.connected);
+      case '_disconnected':
+        state = state.copyWith(connectionStatus: ConnectionStatus.disconnected);
+
+      // ── Auction events (SDD §7.2) ──────────────────────────
+      case 'current_state':
+        _handleCurrentState(msg);
+      case 'bid_update':
+        _handleBidUpdate(msg);
+      case 'bid_confirmed':
+        _handleBidConfirmed(msg);
+      case 'bid_rejected':
+        _handleBidRejected(msg);
       case 'timer_extended':
         _handleTimerExtended(msg);
       case 'auction_ended':
@@ -205,23 +232,17 @@ class AuctionNotifier extends StateNotifier<AuctionState> {
           currentPrice:
               (msg['final_price'] as num?)?.toDouble() ?? state.currentPrice,
         );
-      case 'snapshot':
-        _handleSnapshot(msg);
       case 'error':
         state = state.copyWith(error: msg['detail'] as String?);
     }
   }
 
-  void _handleBidAccepted(Map<String, dynamic> msg) {
-    final newPrice = (msg['current_price'] as num).toDouble();
+  /// 'bid_update' — broadcast to all participants when any bid is accepted.
+  void _handleBidUpdate(Map<String, dynamic> msg) {
+    final newPrice = (msg['current_price'] as num? ?? msg['amount'] as num).toDouble();
     final bidderId = msg['user_id'] as String? ?? '';
     final myId = _currentUserId;
     final isOwn = bidderId == myId;
-
-    // Cancel optimistic rollback if server confirmed our bid
-    if (isOwn) {
-      _cancelOptimisticRollback();
-    }
 
     // Remove any pending optimistic entry for this price
     final updatedBids = state.bids
@@ -244,8 +265,23 @@ class AuctionNotifier extends StateNotifier<AuctionState> {
       currentPrice: newPrice,
       bidCount: msg['bid_count'] as int? ?? state.bidCount + 1,
       lastBidder: bidderId,
+      timerRemaining: msg['timer_remaining'] as int?,
       bids: bids,
     );
+  }
+
+  /// 'bid_confirmed' — sent only to the bidder who placed the bid.
+  void _handleBidConfirmed(Map<String, dynamic> msg) {
+    _cancelOptimisticRollback();
+    // The bid_update event handles the actual state update for all clients.
+    // This event just confirms our optimistic bid was accepted.
+  }
+
+  /// 'bid_rejected' — sent only to the bidder whose bid was rejected.
+  void _handleBidRejected(Map<String, dynamic> msg) {
+    _rollbackOptimistic();
+    final reason = msg['reason'] as String? ?? 'مزايدة مرفوضة';
+    state = state.copyWith(error: reason);
   }
 
   void _handleTimerExtended(Map<String, dynamic> msg) {
@@ -266,9 +302,11 @@ class AuctionNotifier extends StateNotifier<AuctionState> {
     });
   }
 
-  void _handleSnapshot(Map<String, dynamic> msg) {
-    // Full state reconciliation on reconnect
-    final bidHistory = (msg['recent_bids'] as List?)
+  /// 'current_state' — full state reconciliation on connect/reconnect.
+  /// Contains all values: price, bid_count, timer_remaining, watcher_count,
+  /// last_20_bids, seller_id, etc.
+  void _handleCurrentState(Map<String, dynamic> msg) {
+    final bidHistory = (msg['last_20_bids'] as List? ?? msg['recent_bids'] as List?)
             ?.map((b) {
               final m = b as Map<String, dynamic>;
               return BidEntry(
@@ -283,16 +321,20 @@ class AuctionNotifier extends StateNotifier<AuctionState> {
         state.bids;
 
     state = state.copyWith(
-      currentPrice: (msg['current_price'] as num).toDouble(),
+      currentPrice: (msg['current_price'] as num? ?? msg['price'] as num?)?.toDouble() ?? state.currentPrice,
       bidCount: msg['bid_count'] as int? ?? 0,
+      timerRemaining: msg['timer_remaining'] as int?,
       endsAt: msg['ends_at'] as String?,
       status: msg['status'] as String? ?? state.status,
       winnerId: msg['winner_id'] as String?,
+      sellerId: msg['seller_id'] as String?,
       minIncrement: (msg['min_increment'] as num?)?.toDouble() ?? state.minIncrement,
       currency: msg['currency'] as String? ?? state.currency,
       listingTitle: msg['listing_title'] as String? ?? state.listingTitle,
       imageUrl: msg['image_url'] as String? ?? state.imageUrl,
       bids: bidHistory,
+      watcherCount: msg['watcher_count'] as int? ?? state.watcherCount,
+      connectionStatus: ConnectionStatus.connected,
     );
   }
 
@@ -329,15 +371,12 @@ class AuctionNotifier extends StateNotifier<AuctionState> {
     // Start rollback timer
     _optimisticRollbackTimer = Timer(_optimisticTimeout, _rollbackOptimistic);
 
-    // Fire REST call
-    try {
-      final api = ref.read(apiClientProvider);
-      await api.post('/auctions/$auctionId/bid', data: {'amount': amount});
-      // Server will confirm via WebSocket 'bid_accepted'
-    } catch (e) {
-      _rollbackOptimistic();
-      state = state.copyWith(error: e.toString());
-    }
+    // Emit bid via Socket.IO — amount in CENTS (integer)
+    wsClient.emit('place_bid', {
+      'auction_id': auctionId,
+      'amount': (amount * 100).round(),
+    });
+    // Server will confirm via 'bid_confirmed' or reject via 'bid_rejected'
   }
 
   void _rollbackOptimistic() {

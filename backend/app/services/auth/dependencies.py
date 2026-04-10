@@ -13,7 +13,7 @@ Usage:
     async def create(user: User = Depends(require_kyc)): ...
 
     @router.post("/admin/ban")
-    async def ban(user: User = Depends(require_role("admin", "super_admin"))): ...
+    async def ban(user: User = Depends(require_role("admin", "superadmin"))): ...
 
     @router.post("/bid")
     async def bid(user: User = Depends(require_ats(200))): ...
@@ -21,7 +21,6 @@ Usage:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Callable
 
 from fastapi import Depends, HTTPException, Request, status
@@ -40,15 +39,23 @@ bearer_scheme = HTTPBearer()
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     redis: Redis = Depends(get_redis),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """Decode RS256 JWT, check Redis blacklist, load and return User.
 
+    Caches user on request.state to avoid repeated DB hits
+    when multiple dependencies call get_current_user.
+
     Raises 401 for invalid/expired/blacklisted tokens.
     Raises 403 for suspended or banned accounts.
     """
+    # Return cached user if already resolved this request
+    if hasattr(request.state, "current_user"):
+        return request.state.current_user
+
     payload: TokenPayload | None = decode_access_token(credentials.credentials)
     if payload is None:
         raise HTTPException(
@@ -101,8 +108,11 @@ async def get_current_user(
             },
         )
 
-    # Stash payload on request state for logout (need jti + exp)
+    # Stash payload on user for logout (need jti + exp)
     user._token_payload = payload  # type: ignore[attr-defined]
+
+    # Cache on request state
+    request.state.current_user = user
 
     return user
 
@@ -124,18 +134,33 @@ async def require_kyc(
     return user
 
 
+async def require_seller(
+    user: User = Depends(require_kyc),
+) -> User:
+    """Require KYC-verified user with seller or higher role."""
+    role = user.role.value if hasattr(user.role, "value") else user.role
+    if role not in ("seller", "admin", "superadmin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "SELLER_REQUIRED",
+                "message_en": "Seller account required for this action",
+                "message_ar": "يلزم حساب بائع لهذا الإجراء",
+            },
+        )
+    return user
+
+
 def require_role(*roles: str) -> Callable:
     """Factory returning a dependency that checks user.role against allowed list.
 
     SDD §6 authorization matrix:
-      buyer       → bid
-      seller(KYC) → bid + create listing
-      moderator   → moderate
-      mediator    → mediate disputes
-      admin       → admin panel
-      super_admin → everything
+      buyer      → bid
+      seller(KYC)→ bid + create listing
+      admin      → admin panel
+      superadmin → everything
 
-    Usage: Depends(require_role("admin", "super_admin"))
+    Usage: Depends(require_role("admin", "superadmin"))
     """
 
     async def _check_role(user: User = Depends(get_current_user)) -> User:
@@ -152,10 +177,6 @@ def require_role(*roles: str) -> Callable:
         return user
 
     return _check_role
-
-
-# Alias for backward compatibility with existing service imports
-require_kyc_verified = require_kyc
 
 
 def require_ats(min_score: int) -> Callable:

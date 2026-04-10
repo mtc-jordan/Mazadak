@@ -7,6 +7,8 @@ from typing import Annotated
 import phonenumbers
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.config import settings
+
 # Allowed country codes — SDD §5.2, FRD acceptance criterion
 ALLOWED_COUNTRY_CODES = {"JO", "SA", "AE"}  # +962, +966, +971
 
@@ -39,10 +41,18 @@ def validate_phone_e164(value: str) -> str:
 Phone = Annotated[str, Field(examples=["+962790000000"])]
 
 
+def _mask_phone(phone: str) -> str:
+    """Mask phone for display: +962 7XX XXX X23."""
+    if not phone or len(phone) < 6:
+        return phone
+    return phone[:4] + " " + "X" * (len(phone) - 6) + " " + phone[-2:]
+
+
 # ── Registration / OTP ──────────────────────────────────────────
 
 class RegisterRequest(BaseModel):
     phone: Phone
+    country_code: str = Field(default="JO", pattern=r"^[A-Z]{2}$")
 
     @field_validator("phone")
     @classmethod
@@ -66,23 +76,13 @@ class VerifyOTPRequest(BaseModel):
         return validate_phone_e164(v)
 
 
-# ── Login ───────────────────────────────────────────────────────
-
-class LoginRequest(BaseModel):
-    phone: Phone
-
-    @field_validator("phone")
-    @classmethod
-    def _validate_phone(cls, v: str) -> str:
-        return validate_phone_e164(v)
-
-
 # ── Token responses ─────────────────────────────────────────────
 
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    expires_in: int = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
 
 
 class RefreshRequest(BaseModel):
@@ -91,6 +91,7 @@ class RefreshRequest(BaseModel):
 
 class LogoutRequest(BaseModel):
     refresh_token: str
+    revoke_all: bool = False
 
 
 class LogoutResponse(BaseModel):
@@ -99,27 +100,39 @@ class LogoutResponse(BaseModel):
 
 # ── User profile ────────────────────────────────────────────────
 
-class UserOut(BaseModel):
+class UserResponse(BaseModel):
     id: str
     phone: str
-    full_name_ar: str
-    full_name_en: str | None = None
+    full_name: str | None = None
+    full_name_ar: str | None = None
     email: str | None = None
     role: str
+    status: str
     kyc_status: str
     ats_score: int
     ats_tier: str
-    country_code: str
+    is_pro_seller: bool = False
     preferred_language: str
 
     model_config = {"from_attributes": True}
+
+    @field_validator("phone")
+    @classmethod
+    def _mask(cls, v: str) -> str:
+        return _mask_phone(v)
+
+    @field_validator("ats_tier", mode="before")
+    @classmethod
+    def _tier_value(cls, v: object) -> str:
+        return v.value if hasattr(v, "value") else str(v)
 
 
 class AuthResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
-    user: UserOut
+    expires_in: int = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    user: UserResponse
 
 
 # ── Error detail ────────────────────────────────────────────────
@@ -137,7 +150,7 @@ class ErrorDetail(BaseModel):
 class KYCInitiateResponse(BaseModel):
     upload_urls: dict[str, str]  # {id_front, id_back, selfie} → presigned PUT URLs
     s3_keys: dict[str, str]      # {id_front, id_back, selfie} → S3 keys to send back in submit
-    expires_in: int = 300
+    expires_in: int = 900        # 15 minutes per spec
 
 
 class KYCSubmitRequest(BaseModel):
@@ -153,6 +166,13 @@ class KYCSubmitResponse(BaseModel):
     confidence: float | None = None
 
 
+class KYCStatusResponse(BaseModel):
+    kyc_status: str
+    kyc_submitted_at: str | None = None
+    kyc_reviewed_at: str | None = None
+    kyc_rejection_reason: str | None = None
+
+
 # ── Admin KYC review ────────────────────────────────────────────
 
 class KYCQueueItem(BaseModel):
@@ -163,7 +183,7 @@ class KYCQueueItem(BaseModel):
     s3_key: str
     rekognition_confidence: float | None
     status: str
-    created_at: str
+    uploaded_at: str
 
     model_config = {"from_attributes": True}
 

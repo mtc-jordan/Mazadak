@@ -99,7 +99,10 @@ class NotificationNotifier extends StateNotifier<NotificationState> {
   Future<void> markAsRead(List<String> ids) async {
     try {
       final api = _ref.read(apiClientProvider);
-      await api.post('/notifications/read', data: {'notification_ids': ids});
+      // PATCH each notification individually
+      for (final id in ids) {
+        await api.patch('/notifications/$id/read');
+      }
 
       state = state.copyWith(
         notifications: state.notifications.map((n) {
@@ -125,12 +128,36 @@ class NotificationNotifier extends StateNotifier<NotificationState> {
   }
 
   Future<void> markAllAsRead() async {
-    final unreadIds = state.notifications
-        .where((n) => !n.isRead)
-        .map((n) => n.id)
-        .toList();
-    if (unreadIds.isNotEmpty) {
-      await markAsRead(unreadIds);
+    try {
+      final api = _ref.read(apiClientProvider);
+      await api.post('/notifications/read-all');
+
+      state = state.copyWith(
+        notifications: state.notifications
+            .map((n) => AppNotification(
+                  id: n.id,
+                  titleAr: n.titleAr,
+                  titleEn: n.titleEn,
+                  bodyAr: n.bodyAr,
+                  bodyEn: n.bodyEn,
+                  isRead: true,
+                  createdAt: n.createdAt,
+                  payload: n.payload,
+                ))
+            .toList(),
+        unreadCount: 0,
+      );
+    } catch (_) {
+      // Non-critical — will sync on next load
+    }
+  }
+
+  Future<void> deleteNotification(String id) async {
+    try {
+      final api = _ref.read(apiClientProvider);
+      await api.delete('/notifications/$id');
+    } catch (_) {
+      // Non-critical
     }
   }
 }

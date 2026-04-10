@@ -49,7 +49,7 @@ from jose import jwt
 import app.core.security as sec
 from app.core.config import settings
 from app.services.auth import service
-from app.services.auth.models import ATSTier, KYCStatus, User, UserRole
+from app.services.auth.models import KYCStatus, User, UserRole, UserStatus
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -59,7 +59,7 @@ from app.services.auth.models import ATSTier, KYCStatus, User, UserRole
 def _make_token(
     user_id: str,
     role: str = "buyer",
-    kyc: str = "pending",
+    kyc: str = "not_started",
     ats: int = 400,
     exp_delta: timedelta | None = None,
     jti: str | None = None,
@@ -84,24 +84,29 @@ async def _create_user(
     db,
     phone: str = "+962790000000",
     role: UserRole = UserRole.BUYER,
-    kyc: KYCStatus = KYCStatus.PENDING,
+    kyc: KYCStatus = KYCStatus.NOT_STARTED,
     ats: int = 400,
-    tier: ATSTier = ATSTier.TRUSTED,
+    status: UserStatus = UserStatus.PENDING_KYC,
     suspended: bool = False,
     banned: bool = False,
 ) -> User:
+    # Map convenience booleans to status enum
+    if banned:
+        status = UserStatus.BANNED
+    elif suspended:
+        status = UserStatus.SUSPENDED
+
     user = User(
         id=str(uuid4()),
         phone=phone,
         full_name_ar="اختبار",
         role=role,
+        status=status,
         kyc_status=kyc,
         ats_score=ats,
-        ats_tier=tier,
-        country_code="JO",
         preferred_language="ar",
-        is_suspended=suspended,
-        is_banned=banned,
+        fcm_tokens=[],
+        is_pro_seller=False,
     )
     db.add(user)
     await db.flush()
@@ -124,13 +129,9 @@ class TestGetCurrentUser:
             "/api/v1/auth/me",
             headers={"Authorization": f"Bearer {token}"},
         )
-        # /auth/me may not exist yet — use any endpoint that requires auth.
-        # We'll test via the logout endpoint instead (requires get_current_user).
-        # Actually, let's test through a direct dependency call pattern.
-        # Better: use the logout endpoint which is guaranteed to exist.
-        # But logout needs a body. Let's use a simple GET if available.
-        # Since /auth/me isn't wired yet, let's POST to /auth/logout.
-        pass  # Covered by test_logout_happy_path below
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["role"] == "buyer"
 
     async def test_missing_auth_header_returns_401(self, client):
         """HTTPBearer returns 401/403 when Authorization header is absent."""
@@ -275,7 +276,7 @@ class TestRequireRole:
         from app.services.auth.dependencies import require_role
 
         user = await _create_user(db_session, role=UserRole.ADMIN)
-        check = require_role("admin", "super_admin")
+        check = require_role("admin", "superadmin")
         result = await check(user=user)
         assert result.id == user.id
 
@@ -284,7 +285,7 @@ class TestRequireRole:
         from app.services.auth.dependencies import require_role
 
         user = await _create_user(db_session, role=UserRole.BUYER)
-        check = require_role("admin", "super_admin")
+        check = require_role("admin", "superadmin")
         with pytest.raises(HTTPException) as exc_info:
             await check(user=user)
         assert exc_info.value.status_code == 403
@@ -293,8 +294,8 @@ class TestRequireRole:
     async def test_multiple_roles_any_match(self, db_session):
         from app.services.auth.dependencies import require_role
 
-        user = await _create_user(db_session, role=UserRole.MODERATOR)
-        check = require_role("moderator", "admin", "super_admin")
+        user = await _create_user(db_session, role=UserRole.ADMIN)
+        check = require_role("seller", "admin", "superadmin")
         result = await check(user=user)
         assert result.id == user.id
 
@@ -303,16 +304,16 @@ class TestRequireRole:
         from app.services.auth.dependencies import require_role
 
         user = await _create_user(db_session, role=UserRole.SELLER)
-        check = require_role("admin", "super_admin")
+        check = require_role("admin", "superadmin")
         with pytest.raises(HTTPException) as exc_info:
             await check(user=user)
         assert exc_info.value.status_code == 403
 
-    async def test_super_admin_passes_admin_check(self, db_session):
+    async def test_superadmin_passes_admin_check(self, db_session):
         from app.services.auth.dependencies import require_role
 
-        user = await _create_user(db_session, role=UserRole.SUPER_ADMIN)
-        check = require_role("admin", "super_admin")
+        user = await _create_user(db_session, role=UserRole.SUPERADMIN)
+        check = require_role("admin", "superadmin")
         result = await check(user=user)
         assert result.id == user.id
 
@@ -364,21 +365,21 @@ class TestRequireATS:
     async def test_elite_user_passes_high_threshold(self, db_session):
         from app.services.auth.dependencies import require_ats
 
-        user = await _create_user(db_session, ats=950, tier=ATSTier.ELITE)
+        user = await _create_user(db_session, ats=950)
         check = require_ats(800)
         result = await check(user=user)
         assert result.ats_score == 950
 
 
 # ═══════════════════════════════════════════════════════════════════
-# POST /auth/refresh — FR-AUTH-003
+# POST /auth/refresh — FR-AUTH-003 (DB-based refresh tokens)
 # ═══════════════════════════════════════════════════════════════════
 
 class TestRefreshEndpoint:
     async def test_happy_path_returns_new_pair(self, client, db_session, fake_redis):
         user = await _create_user(db_session)
         _, refresh, _ = service.issue_tokens(user)
-        await service.store_refresh_token(refresh, user.id, fake_redis)
+        await service.store_refresh_token(refresh, user.id, db_session)
 
         resp = await client.post(
             "/api/v1/auth/refresh",
@@ -389,6 +390,7 @@ class TestRefreshEndpoint:
         assert "access_token" in data
         assert "refresh_token" in data
         assert data["token_type"] == "bearer"
+        assert "expires_in" in data
         # New refresh should differ from old
         assert data["refresh_token"] != refresh
 
@@ -398,7 +400,7 @@ class TestRefreshEndpoint:
         """After refresh, the old token should be invalidated (rotation)."""
         user = await _create_user(db_session)
         _, refresh, _ = service.issue_tokens(user)
-        await service.store_refresh_token(refresh, user.id, fake_redis)
+        await service.store_refresh_token(refresh, user.id, db_session)
 
         # First refresh succeeds
         resp1 = await client.post(
@@ -428,7 +430,7 @@ class TestRefreshEndpoint:
     ):
         user = await _create_user(db_session, suspended=True)
         _, refresh, _ = service.issue_tokens(user)
-        await service.store_refresh_token(refresh, user.id, fake_redis)
+        await service.store_refresh_token(refresh, user.id, db_session)
 
         resp = await client.post(
             "/api/v1/auth/refresh",
@@ -442,7 +444,7 @@ class TestRefreshEndpoint:
     ):
         user = await _create_user(db_session, banned=True)
         _, refresh, _ = service.issue_tokens(user)
-        await service.store_refresh_token(refresh, user.id, fake_redis)
+        await service.store_refresh_token(refresh, user.id, db_session)
 
         resp = await client.post(
             "/api/v1/auth/refresh",
@@ -452,10 +454,10 @@ class TestRefreshEndpoint:
 
     async def test_new_tokens_are_valid(self, client, db_session, fake_redis):
         """The new access token from refresh should be decodeable and
-        the new refresh token should be stored in Redis."""
+        the new refresh token should be stored in DB."""
         user = await _create_user(db_session)
         _, refresh, _ = service.issue_tokens(user)
-        await service.store_refresh_token(refresh, user.id, fake_redis)
+        await service.store_refresh_token(refresh, user.id, db_session)
 
         resp = await client.post(
             "/api/v1/auth/refresh",
@@ -472,7 +474,7 @@ class TestRefreshEndpoint:
 
         # Verify new refresh token is stored
         uid = await service.validate_refresh_token(
-            data["refresh_token"], fake_redis,
+            data["refresh_token"], db_session,
         )
         assert uid == user.id
 
@@ -485,7 +487,7 @@ class TestLogoutEndpoint:
     async def test_happy_path(self, client, db_session, fake_redis):
         user = await _create_user(db_session)
         access, refresh, jti = service.issue_tokens(user)
-        await service.store_refresh_token(refresh, user.id, fake_redis)
+        await service.store_refresh_token(refresh, user.id, db_session)
 
         resp = await client.post(
             "/api/v1/auth/logout",
@@ -501,7 +503,7 @@ class TestLogoutEndpoint:
         """FR-AUTH-004: JTI added to Redis blacklist with remaining TTL."""
         user = await _create_user(db_session)
         access, refresh, jti = service.issue_tokens(user)
-        await service.store_refresh_token(refresh, user.id, fake_redis)
+        await service.store_refresh_token(refresh, user.id, db_session)
 
         # Logout
         await client.post(
@@ -527,7 +529,7 @@ class TestLogoutEndpoint:
     ):
         user = await _create_user(db_session)
         access, refresh, _ = service.issue_tokens(user)
-        await service.store_refresh_token(refresh, user.id, fake_redis)
+        await service.store_refresh_token(refresh, user.id, db_session)
 
         # Logout
         await client.post(
@@ -536,8 +538,8 @@ class TestLogoutEndpoint:
             headers={"Authorization": f"Bearer {access}"},
         )
 
-        # Refresh token should be gone from Redis
-        uid = await service.validate_refresh_token(refresh, fake_redis)
+        # Refresh token should be revoked in DB
+        uid = await service.validate_refresh_token(refresh, db_session)
         assert uid is None
 
         # Attempt to use refresh → 401
@@ -553,7 +555,7 @@ class TestLogoutEndpoint:
         """The blacklist entry should have TTL ≈ remaining token lifetime."""
         user = await _create_user(db_session)
         access, refresh, jti = service.issue_tokens(user)
-        await service.store_refresh_token(refresh, user.id, fake_redis)
+        await service.store_refresh_token(refresh, user.id, db_session)
 
         await client.post(
             "/api/v1/auth/logout",
@@ -570,6 +572,52 @@ class TestLogoutEndpoint:
             "/api/v1/auth/logout",
             json={"refresh_token": "x"},
         )
+        assert resp.status_code in (401, 403)
+
+    async def test_revoke_all_sessions(self, client, db_session, fake_redis):
+        """revoke_all=true should revoke all refresh tokens for the user."""
+        user = await _create_user(db_session)
+        access, refresh1, _ = service.issue_tokens(user)
+        await service.store_refresh_token(refresh1, user.id, db_session)
+
+        _, refresh2, _ = service.issue_tokens(user)
+        await service.store_refresh_token(refresh2, user.id, db_session)
+
+        # Logout with revoke_all
+        resp = await client.post(
+            "/api/v1/auth/logout",
+            json={"refresh_token": refresh1, "revoke_all": True},
+            headers={"Authorization": f"Bearer {access}"},
+        )
+        assert resp.status_code == 200
+
+        # Both refresh tokens should be revoked
+        assert await service.validate_refresh_token(refresh1, db_session) is None
+        assert await service.validate_refresh_token(refresh2, db_session) is None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# GET /auth/me
+# ═══════════════════════════════════════════════════════════════════
+
+class TestMeEndpoint:
+    async def test_returns_user_profile(self, client, db_session, fake_redis):
+        user = await _create_user(db_session)
+        token, _ = _make_token(user.id)
+
+        resp = await client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == user.id
+        assert data["role"] == "buyer"
+        # Phone should be masked
+        assert "X" in data["phone"]
+
+    async def test_unauthenticated_returns_401(self, client):
+        resp = await client.get("/api/v1/auth/me")
         assert resp.status_code in (401, 403)
 
 
@@ -604,8 +652,7 @@ class TestFullAuthFlow:
         access1 = tokens["access_token"]
         refresh1 = tokens["refresh_token"]
 
-        # 3. Use access token (logout endpoint as proxy for "any authed endpoint")
-        # First verify it works
+        # 3. Use access token — refresh to get new pair
         resp = await client.post(
             "/api/v1/auth/refresh",
             json={"refresh_token": refresh1},

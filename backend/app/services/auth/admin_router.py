@@ -19,7 +19,7 @@ router = APIRouter(prefix="/admin/kyc", tags=["admin-kyc"])
     response_model=list[schemas.KYCQueueItem],
 )
 async def get_kyc_queue(
-    user: User = Depends(require_role("admin", "super_admin", "moderator")),
+    user: User = Depends(require_role("admin", "superadmin")),
     db: AsyncSession = Depends(get_db),
 ):
     """Get all KYC submissions pending manual review.
@@ -37,7 +37,7 @@ async def get_kyc_queue(
 )
 async def approve_kyc(
     user_id: str,
-    admin: User = Depends(require_role("admin", "super_admin")),
+    admin: User = Depends(require_role("admin", "superadmin")),
     db: AsyncSession = Depends(get_db),
 ):
     """Approve a user's KYC — sets status to KYC_VERIFIED.
@@ -78,7 +78,7 @@ async def approve_kyc(
 async def reject_kyc(
     user_id: str,
     body: schemas.KYCReviewRequest,
-    admin: User = Depends(require_role("admin", "super_admin")),
+    admin: User = Depends(require_role("admin", "superadmin")),
     db: AsyncSession = Depends(get_db),
 ):
     """Reject a user's KYC — sets status to REJECTED with reason.

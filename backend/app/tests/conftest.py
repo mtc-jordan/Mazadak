@@ -20,7 +20,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.database import Base, get_db
-from app.main import app
+from app.main import _fastapi_app as app
 
 
 # ── Test RSA keys (generated once per session) ──────────────────
@@ -83,9 +83,14 @@ class FakeRedis:
         with self._lock:
             return self._store.get(key)
 
-    async def set(self, key: str, value: str) -> None:
+    async def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool | None:
         with self._lock:
+            if nx and key in self._store:
+                return None  # Key already exists — NX fails
             self._store[key] = str(value)
+            if ex is not None:
+                self._ttls[key] = ex
+            return True
 
     async def setex(self, key: str, ttl: int, value: str) -> None:
         with self._lock:
@@ -95,6 +100,12 @@ class FakeRedis:
     async def incr(self, key: str) -> int:
         with self._lock:
             val = int(self._store.get(key, "0")) + 1
+            self._store[key] = str(val)
+            return val
+
+    async def decr(self, key: str) -> int:
+        with self._lock:
+            val = int(self._store.get(key, "0")) - 1
             self._store[key] = str(val)
             return val
 
@@ -176,7 +187,13 @@ class FakeRedis:
 
     async def exists(self, key: str) -> int:
         with self._lock:
-            return 1 if (key in self._store or key in self._hashes) else 0
+            return 1 if (key in self._store or key in self._hashes or key in self._sets) else 0
+
+    # ── Pipeline support ──────────────────────────────────────
+
+    def pipeline(self, transaction: bool = True) -> "FakePipeline":
+        """Return a pipeline that buffers commands and executes them."""
+        return FakePipeline(self)
 
     # ── Lua script lifecycle (SCRIPT LOAD / EVALSHA / EVAL) ───
 
@@ -192,54 +209,82 @@ class FakeRedis:
         with self._lock:
             if sha not in self._scripts:
                 raise Exception("NOSCRIPT No matching script")
-        return await self._exec_bid_script(args)
+        return await self._exec_bid_script(num_keys, args)
 
     async def eval(self, script: str, num_keys: int, *args) -> list:
         """EVAL — execute script inline (legacy path)."""
-        return await self._exec_bid_script(args)
+        return await self._exec_bid_script(num_keys, args)
 
-    async def _exec_bid_script(self, args: tuple) -> list:
-        """Emulate the BID_VALIDATE_AND_PLACE Lua script atomically.
+    async def _exec_bid_script(self, num_keys: int, args: tuple) -> list:
+        """Emulate the BID_VALIDATION_SCRIPT Lua script atomically.
 
-        The entire read-check-write sequence runs under self._lock,
-        mirroring Redis's single-threaded execution model.
-        Validation order matches the Lua script: status → seller →
-        banned → amount.
+        Mirrors the EXACT Lua logic — lazy reads, same check order,
+        same return shapes.
+
+        KEYS[1-9]: price, status, seller, last_bidder, bid_count,
+                   banned_set, root_key, extension_ct, min_increment
+        ARGV: bid_amount, bidder_id
         """
-        key = args[0]
-        user_id = args[1]
-        amount = float(args[2])
+        keys = args[:num_keys]
+        argv = args[num_keys:]
+
+        price_key     = keys[0] if len(keys) > 0 else ""
+        status_key    = keys[1] if len(keys) > 1 else ""
+        seller_key    = keys[2] if len(keys) > 2 else ""
+        last_key      = keys[3] if len(keys) > 3 else ""
+        bids_key      = keys[4] if len(keys) > 4 else ""
+        banned_key    = keys[5] if len(keys) > 5 else ""
+        ttl_key       = keys[6] if len(keys) > 6 else ""
+        ext_key       = keys[7] if len(keys) > 7 else ""
+        increment_key = keys[8] if len(keys) > 8 else ""
+
+        bid_amount = int(argv[0]) if len(argv) > 0 else 0
+        bidder_id  = argv[1] if len(argv) > 1 else ""
 
         with self._lock:
-            h = self._hashes.get(key, {})
+            # Read increment upfront (matches Lua)
+            increment = int(self._store.get(increment_key, "0"))
 
-            status = h.get("status", "")
-            seller_id = h.get("seller_id", "")
-            current_price = float(h.get("current_price", "0"))
-            min_increment = float(h.get("min_increment", "25"))
-
-            # 1. Auction must be ACTIVE
+            # Check 1: Auction must be ACTIVE
+            status = self._store.get(status_key, "")
             if status != "ACTIVE":
-                return ["REJECTED", "AUCTION_ENDED"]
+                return ["REJECTED", "AUCTION_NOT_ACTIVE"]
 
-            # 2. Seller cannot bid on own auction
-            if user_id == seller_id:
+            # Check 2: Bidder cannot be the seller
+            seller = self._store.get(seller_key, "")
+            if seller == bidder_id:
                 return ["REJECTED", "SELLER_CANNOT_BID"]
 
-            # 3. Banned users cannot bid
-            if user_id in self._sets.get("banned_users", set()):
-                return ["REJECTED", "USER_BANNED"]
+            # Check 3: Bidder not in banned set
+            if bidder_id in self._sets.get(banned_key, set()):
+                return ["REJECTED", "BIDDER_BANNED"]
 
-            # 4. Bid must exceed current price + minimum increment
-            if amount <= (current_price + min_increment):
-                return ["REJECTED", "BID_TOO_LOW"]
+            # Check 4: Bid amount must exceed current price + min increment
+            current_price = int(self._store.get(price_key, "0"))
+            min_bid = current_price + increment
+            if bid_amount < min_bid:
+                return ["REJECTED", "BID_TOO_LOW", str(min_bid)]
 
-            # All checks passed — atomically update state
-            self._hashes[key]["current_price"] = str(amount)
-            self._hashes[key]["last_bidder"] = user_id
-            bid_count = int(self._hashes[key].get("bid_count", "0")) + 1
-            self._hashes[key]["bid_count"] = str(bid_count)
-            return ["ACCEPTED"]
+            # All checks passed — update atomically
+            self._store[price_key] = str(bid_amount)
+            self._store[last_key] = bidder_id
+            bid_count = int(self._store.get(bids_key, "0")) + 1
+            self._store[bids_key] = str(bid_count)
+
+            # Anti-snipe: if TTL <= 180s, extend by 180s
+            ttl = self._ttls.get(ttl_key, -1)
+            extended = False
+
+            if ttl > 0 and ttl <= 180:
+                self._ttls[ttl_key] = ttl + 180
+                ext_ct = int(self._store.get(ext_key, "0")) + 1
+                self._store[ext_key] = str(ext_ct)
+                extended = True
+
+            if extended:
+                return ["ACCEPTED", str(bid_amount), "EXTENDED", str(ttl + 180)]
+            else:
+                return ["ACCEPTED", str(bid_amount), "NORMAL", str(ttl)]
 
     # ── Pub/Sub commands ─────────────────────────────────────────
 
@@ -258,6 +303,55 @@ class FakeRedis:
 
     async def aclose(self) -> None:
         pass
+
+
+class FakePipeline:
+    """Minimal Redis pipeline mock for FakeRedis.
+
+    Buffers commands and executes them sequentially via execute().
+    Supports: get, set, ttl, incr, expire, delete, exists.
+    """
+
+    def __init__(self, redis: FakeRedis):
+        self._redis = redis
+        self._commands: list[tuple[str, tuple, dict]] = []
+
+    def get(self, key: str) -> "FakePipeline":
+        self._commands.append(("get", (key,), {}))
+        return self
+
+    def set(self, key: str, value: str, ex: int | None = None) -> "FakePipeline":
+        self._commands.append(("set", (key, value), {"ex": ex}))
+        return self
+
+    def ttl(self, key: str) -> "FakePipeline":
+        self._commands.append(("ttl", (key,), {}))
+        return self
+
+    def incr(self, key: str) -> "FakePipeline":
+        self._commands.append(("incr", (key,), {}))
+        return self
+
+    def expire(self, key: str, ttl: int) -> "FakePipeline":
+        self._commands.append(("expire", (key, ttl), {}))
+        return self
+
+    def delete(self, *keys: str) -> "FakePipeline":
+        self._commands.append(("delete", keys, {}))
+        return self
+
+    def exists(self, key: str) -> "FakePipeline":
+        self._commands.append(("exists", (key,), {}))
+        return self
+
+    async def execute(self) -> list:
+        results = []
+        for cmd, args, kwargs in self._commands:
+            method = getattr(self._redis, cmd)
+            result = await method(*args, **kwargs)
+            results.append(result)
+        self._commands.clear()
+        return results
 
 
 class FakePubSub:
@@ -303,11 +397,26 @@ def fake_redis():
 
 # ── In-memory SQLite async engine ───────────────────────────────
 
+# Patch PostgreSQL-only types for SQLite compatibility
+from sqlalchemy.dialects.postgresql import JSONB, ARRAY
+from sqlalchemy import JSON, Text
+from sqlalchemy.ext.compiler import compiles
+
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_sqlite(type_, compiler, **kw):
+    return "JSON"
+
+@compiles(ARRAY, "sqlite")
+def _compile_array_sqlite(type_, compiler, **kw):
+    return "TEXT"
+
+
 def _register_sqlite_functions(dbapi_conn, connection_record):
     """Register PostgreSQL-compatible functions for SQLite."""
     import uuid
 
     dbapi_conn.create_function("gen_random_uuid", 0, lambda: str(uuid.uuid4()))
+    dbapi_conn.create_function("now", 0, lambda: "2026-04-08T00:00:00")
 
 
 @pytest.fixture
@@ -317,15 +426,15 @@ async def db_session():
     Note: Escrow tables use ARRAY/JSONB (PostgreSQL-only), so they are
     excluded here. Escrow creation in tests is mocked at the service level."""
     from sqlalchemy import event
-    from app.services.auth.models import User, KYCDocument
-    from app.services.listing.models import Listing
+    from app.services.auth.models import User, UserKycDocument, RefreshToken
+    from app.services.listing.models import Listing, ListingImage
     from app.services.auction.models import Auction, Bid
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     event.listen(engine.sync_engine, "connect", _register_sqlite_functions)
     tables = [
-        User.__table__, KYCDocument.__table__, Listing.__table__,
-        Auction.__table__, Bid.__table__,
+        User.__table__, UserKycDocument.__table__, RefreshToken.__table__,
+        Listing.__table__, ListingImage.__table__, Auction.__table__, Bid.__table__,
     ]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)
@@ -369,19 +478,20 @@ def mock_sms():
 @pytest.fixture
 async def test_user(db_session):
     """Create a standard buyer user in the test DB and return it."""
-    from app.services.auth.models import User, UserRole, KYCStatus, ATSTier
+    from app.services.auth.models import User, UserRole, UserStatus, KYCStatus
 
     user = User(
         id=str(uuid4()),
         phone="+962790000000",
+        full_name="Test User",
         full_name_ar="مستخدم اختبار",
-        full_name_en="Test User",
         role=UserRole.BUYER,
-        kyc_status=KYCStatus.PENDING,
+        status=UserStatus.PENDING_KYC,
+        kyc_status=KYCStatus.NOT_STARTED,
         ats_score=400,
-        ats_tier=ATSTier.TRUSTED,
-        country_code="JO",
         preferred_language="ar",
+        fcm_tokens=[],
+        is_pro_seller=False,
     )
     db_session.add(user)
     await db_session.flush()
@@ -392,18 +502,15 @@ async def test_user(db_session):
 @pytest.fixture
 def auth_headers(test_user, fake_redis):
     """Return (headers_dict, access_token, refresh_token, jti) for test_user."""
-    from app.services.auth.service import issue_tokens, store_refresh_token
+    from app.services.auth.service import issue_tokens
 
     access_token, refresh_token, jti = issue_tokens(test_user)
 
-    async def _store():
-        await store_refresh_token(refresh_token, test_user.id, fake_redis)
     return {
         "headers": {"Authorization": f"Bearer {access_token}"},
         "access_token": access_token,
         "refresh_token": refresh_token,
         "jti": jti,
-        "store_refresh": _store,
     }
 
 
@@ -412,19 +519,20 @@ def auth_headers(test_user, fake_redis):
 @pytest.fixture
 async def verified_user(db_session):
     """Create a KYC-verified seller user."""
-    from app.services.auth.models import User, UserRole, KYCStatus, ATSTier
+    from app.services.auth.models import User, UserRole, UserStatus, KYCStatus
 
     user = User(
         id=str(uuid4()),
         phone="+962791111111",
+        full_name="Verified Seller",
         full_name_ar="بائع معتمد",
-        full_name_en="Verified Seller",
         role=UserRole.SELLER,
+        status=UserStatus.ACTIVE,
         kyc_status=KYCStatus.VERIFIED,
         ats_score=600,
-        ats_tier=ATSTier.PRO,
-        country_code="JO",
         preferred_language="ar",
+        fcm_tokens=[],
+        is_pro_seller=False,
     )
     db_session.add(user)
     await db_session.flush()
@@ -442,16 +550,23 @@ def verified_auth_headers(verified_user, fake_redis):
 
 
 def make_listing_data(**overrides) -> dict:
-    """Build valid listing creation payload with sensible defaults."""
+    """Build valid listing creation payload with sensible defaults.
+
+    All prices in INTEGER cents (min 100 = 1 JOD).
+    starts_at/ends_at must be in the future.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
     data = {
         "title_ar": "سيارة تويوتا كامري 2023",
-        "description_ar": "سيارة تويوتا كامري موديل 2023 بحالة ممتازة، قطعت 20 ألف كم فقط، لون أبيض لؤلؤي",
+        "title_en": "Toyota Camry 2023",
         "category_id": 1,
         "condition": "like_new",
-        "starting_price": 100.0,
-        "listing_currency": "JOD",
-        "duration_hours": 24,
-        "image_urls": ["https://example.com/img1.jpg"],
+        "starting_price": 10000,  # 100 JOD in cents
+        "min_increment": 2500,
+        "starts_at": (now + timedelta(minutes=10)).isoformat(),
+        "ends_at": (now + timedelta(hours=25)).isoformat(),
     }
     data.update(overrides)
     return data

@@ -190,11 +190,12 @@ class TestGetOrCreateUser:
         user, is_new = await service.get_or_create_user("+962790000000", db_session)
         assert is_new is True
         assert user.phone == "+962790000000"
-        assert user.kyc_status.value == "pending"  # PENDING_KYC
+        assert user.kyc_status.value == "not_started"
         assert user.ats_score == 400
         assert user.ats_tier.value == "trusted"
         assert user.role.value == "buyer"
-        assert user.country_code == "JO"
+        assert user.phone_verified is True
+        assert user.last_login_at is not None
 
     async def test_returns_existing_user(self, db_session):
         user1, new1 = await service.get_or_create_user("+962790000000", db_session)
@@ -203,13 +204,26 @@ class TestGetOrCreateUser:
         assert new2 is False
         assert user1.id == user2.id
 
-    async def test_saudi_phone_gets_sa_country_code(self, db_session):
-        user, _ = await service.get_or_create_user("+966501234567", db_session)
-        assert user.country_code == "SA"
+    async def test_banned_user_raises_error(self, db_session):
+        from app.services.auth.models import User, UserRole, UserStatus, KYCStatus
+        from uuid import uuid4
 
-    async def test_uae_phone_gets_ae_country_code(self, db_session):
-        user, _ = await service.get_or_create_user("+971501234567", db_session)
-        assert user.country_code == "AE"
+        user = User(
+            id=str(uuid4()),
+            phone="+962790099099",
+            role=UserRole.BUYER,
+            status=UserStatus.BANNED,
+            kyc_status=KYCStatus.NOT_STARTED,
+            ats_score=400,
+            preferred_language="ar",
+            fcm_tokens=[],
+            is_pro_seller=False,
+        )
+        db_session.add(user)
+        await db_session.flush()
+
+        with pytest.raises(ValueError, match="ACCOUNT_BANNED"):
+            await service.get_or_create_user("+962790099099", db_session)
 
 
 class TestIssueTokens:
@@ -222,25 +236,24 @@ class TestIssueTokens:
         assert len(refresh) == 64  # uuid4().hex * 2
         assert isinstance(jti, str)
 
-    async def test_refresh_token_stored_as_sha256(self, fake_redis, db_session):
+    async def test_refresh_token_stored_in_db(self, db_session):
         user, _ = await service.get_or_create_user("+962790000000", db_session)
         _, refresh, _ = service.issue_tokens(user)
-        await service.store_refresh_token(refresh, user.id, fake_redis)
+        await service.store_refresh_token(refresh, user.id, db_session)
 
-        token_hash = sha256(refresh.encode()).hexdigest()
-        stored_uid = await fake_redis.get(f"session:{token_hash}")
-        assert stored_uid == user.id
-
-    async def test_validate_refresh_token(self, fake_redis, db_session):
-        user, _ = await service.get_or_create_user("+962790000000", db_session)
-        _, refresh, _ = service.issue_tokens(user)
-        await service.store_refresh_token(refresh, user.id, fake_redis)
-
-        uid = await service.validate_refresh_token(refresh, fake_redis)
+        uid = await service.validate_refresh_token(refresh, db_session)
         assert uid == user.id
 
-    async def test_invalid_refresh_returns_none(self, fake_redis):
-        uid = await service.validate_refresh_token("bogus_token", fake_redis)
+    async def test_validate_refresh_token(self, db_session):
+        user, _ = await service.get_or_create_user("+962790000000", db_session)
+        _, refresh, _ = service.issue_tokens(user)
+        await service.store_refresh_token(refresh, user.id, db_session)
+
+        uid = await service.validate_refresh_token(refresh, db_session)
+        assert uid == user.id
+
+    async def test_invalid_refresh_returns_none(self, db_session):
+        uid = await service.validate_refresh_token("bogus_token", db_session)
         assert uid is None
 
 
@@ -314,15 +327,16 @@ class TestVerifyOTPEndpoint:
         assert "access_token" in data
         assert "refresh_token" in data
         assert data["token_type"] == "bearer"
+        assert "expires_in" in data
 
         # User object
         user = data["user"]
-        assert user["phone"] == phone
         assert user["role"] == "buyer"
-        assert user["kyc_status"] == "pending"
+        assert user["kyc_status"] == "not_started"
         assert user["ats_score"] == 400
         assert user["ats_tier"] == "trusted"
-        assert user["country_code"] == "JO"
+        # Phone should be masked
+        assert "X" in user["phone"]
 
     async def test_duplicate_phone_returns_existing_user(
         self, client, fake_redis, db_session, mock_sms,
@@ -404,16 +418,3 @@ class TestVerifyOTPEndpoint:
         )
         assert resp.status_code == 429
         assert resp.json()["detail"]["code"] == "OTP_LOCKED_OUT"
-
-    async def test_saudi_phone_creates_user_with_sa_country(
-        self, client, fake_redis, mock_sms,
-    ):
-        phone = "+966501234567"
-        otp = await self._register_and_get_otp(client, fake_redis, phone)
-
-        resp = await client.post(
-            "/api/v1/auth/verify-otp",
-            json={"phone": phone, "otp": otp},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["user"]["country_code"] == "SA"

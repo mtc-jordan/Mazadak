@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.redis import get_redis
+from app.core.types import UUIDPath
 from app.services.auth.dependencies import get_current_user
 from app.services.auth.models import User
 from app.services.auction.models import Auction
@@ -14,7 +15,7 @@ from app.services.auction.service import get_auction
 
 
 async def get_auction_or_404(
-    auction_id: str,
+    auction_id: UUIDPath,
     db: AsyncSession = Depends(get_db),
 ) -> Auction:
     auction = await get_auction(auction_id, db)
@@ -27,7 +28,7 @@ async def get_auction_or_404(
 
 
 async def check_bid_rate_limit(
-    auction_id: str,
+    auction_id: UUIDPath,
     user: User = Depends(get_current_user),
     redis: Redis = Depends(get_redis),
 ) -> User:

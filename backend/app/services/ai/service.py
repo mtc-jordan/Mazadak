@@ -21,7 +21,7 @@ from app.services.ai.schemas import (
     PriceOracleRequest,
     PriceOracleResponse,
     SnapToListRequest,
-    SnapToListResponse,
+    SnapResult,
 )
 
 AI_SERVICE_BASE = "http://ai-service:8001/api"
@@ -70,14 +70,14 @@ async def snap_to_list(
     data: SnapToListRequest,
     user_id: str,
     db: AsyncSession,
-) -> SnapToListResponse | None:
+) -> SnapResult | None:
     """Image → listing draft via CLIP + GPT-4o + XGBoost pipeline."""
     result = await _call_ai_service(
         "/snap-to-list", data.model_dump(), "snap_to_list", user_id, None, db,
     )
     if not result:
         return None
-    return SnapToListResponse(**result)
+    return SnapResult(**result)
 
 
 async def get_price_oracle(

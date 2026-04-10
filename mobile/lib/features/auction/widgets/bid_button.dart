@@ -87,6 +87,8 @@ class _BidButtonState extends State<BidButton> with TickerProviderStateMixin {
       TweenSequenceItem(tween: Tween(begin: 4, end: -4), weight: 2),
       TweenSequenceItem(tween: Tween(begin: -4, end: 4), weight: 2),
       TweenSequenceItem(tween: Tween(begin: 4, end: -4), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: -4, end: 4), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: 4, end: -4), weight: 2),
       TweenSequenceItem(tween: Tween(begin: -4, end: 0), weight: 1),
     ]).animate(CurvedAnimation(
       parent: _shakeController,
@@ -157,7 +159,7 @@ class _BidButtonState extends State<BidButton> with TickerProviderStateMixin {
         BidButtonState.loading => AppColors.gold,
         BidButtonState.leading => AppColors.emerald,
         BidButtonState.outbid  => AppColors.ember,
-        BidButtonState.disabled => AppColors.mist.withOpacity(0.4),
+        BidButtonState.disabled => AppColors.mist.withValues(alpha: 0.4),
       };
 
   Color get _foregroundColor => switch (widget.state) {
@@ -236,10 +238,10 @@ class _BidButtonState extends State<BidButton> with TickerProviderStateMixin {
             child: Center(
               child: widget.state == BidButtonState.loading
                   ? const SizedBox(
-                      width: 24,
-                      height: 24,
+                      width: 20,
+                      height: 20,
                       child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
+                        strokeWidth: 2,
                         valueColor:
                             AlwaysStoppedAnimation<Color>(Colors.white),
                       ),

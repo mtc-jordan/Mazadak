@@ -1,6 +1,9 @@
 """
 Listing Celery tasks — FR-LIST-005 (image processing), FR-LIST-007 (pHash),
 FR-LIST-012 (Meilisearch sync within 10s).
+
+Image processing: Pillow resize to WebP, 3 thumbnails (100/400/800px),
+pHash computation on primary image (display_order=0).
 """
 
 from __future__ import annotations
@@ -15,14 +18,14 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="tasks.process_listing_images", bind=True, max_retries=3)
-def process_listing_images(self, listing_id: str) -> None:
-    """Download images from S3, convert to WebP, generate thumbnails, compute pHash.
+@celery_app.task(name="tasks.process_listing_image", bind=True, max_retries=3)
+def process_listing_image(self, listing_id: str, s3_key: str) -> None:
+    """Process a single listing image: convert to WebP, generate thumbnails, compute pHash.
 
     FR-LIST-005: Server converts to WebP, generates 100px, 400px, 800px thumbnails.
-    FR-LIST-007: pHash computed on primary image, compared against existing listings.
+    FR-LIST-007: pHash computed on primary image (display_order=0), compared against existing.
     """
-    logger.info("Processing images for listing %s", listing_id)
+    logger.info("Processing image %s for listing %s", s3_key, listing_id)
 
     try:
         import boto3
@@ -32,89 +35,107 @@ def process_listing_images(self, listing_id: str) -> None:
         s3 = boto3.client("s3", region_name=settings.AWS_REGION)
         bucket = settings.S3_BUCKET_MEDIA
 
-        # Load listing from DB (sync context — Celery worker)
-        from app.core.database import engine as async_engine
+        # Download original from S3
+        obj = s3.get_object(Bucket=bucket, Key=s3_key)
+        img_bytes = obj["Body"].read()
+        img = Image.open(io.BytesIO(img_bytes))
+
+        # Generate thumbnails and upload
+        thumb_keys = {}
+        for size in settings.LISTING_THUMBNAIL_SIZES:
+            thumb = img.copy()
+            thumb.thumbnail((size, size), Image.LANCZOS)
+            thumb_key = s3_key.rsplit(".", 1)[0] + f"_thumb_{size}.webp"
+            thumb_buf = io.BytesIO()
+            thumb.save(thumb_buf, format="WEBP", quality=80)
+            thumb_buf.seek(0)
+            s3.put_object(
+                Bucket=bucket,
+                Key=thumb_key,
+                Body=thumb_buf.getvalue(),
+                ContentType="image/webp",
+                ServerSideEncryption="AES256",
+            )
+            thumb_keys[size] = thumb_key
+
+        # Update listing_images record with thumbnail keys
         from sqlalchemy import create_engine, text
         from sqlalchemy.orm import Session
 
-        # Use sync connection for Celery
         sync_url = settings.DATABASE_URL.replace("+asyncpg", "+psycopg2")
         sync_engine = create_engine(sync_url)
 
         with Session(sync_engine) as session:
-            row = session.execute(
-                text("SELECT id, image_urls FROM listings WHERE id = :id"),
-                {"id": listing_id},
-            ).fetchone()
-            if not row:
-                logger.error("Listing %s not found", listing_id)
-                return
-
-            raw_urls = row[1]
-            image_keys = json.loads(raw_urls) if isinstance(raw_urls, str) else raw_urls
-
-            processed_urls = []
-            primary_phash = None
-
-            for idx, key in enumerate(image_keys):
-                # Download original
-                obj = s3.get_object(Bucket=bucket, Key=key)
-                img_bytes = obj["Body"].read()
-                img = Image.open(io.BytesIO(img_bytes))
-
-                # Convert to WebP (full size)
-                webp_key = key.rsplit(".", 1)[0] + ".webp"
-                webp_buf = io.BytesIO()
-                img.save(webp_buf, format="WEBP", quality=85)
-                webp_buf.seek(0)
-                s3.put_object(
-                    Bucket=bucket, Key=webp_key,
-                    Body=webp_buf.getvalue(),
-                    ContentType="image/webp",
-                    ServerSideEncryption="AES256",
-                )
-                processed_urls.append(webp_key)
-
-                # Generate thumbnails (100, 400, 800)
-                for size in settings.LISTING_THUMBNAIL_SIZES:
-                    thumb = img.copy()
-                    thumb.thumbnail((size, size), Image.LANCZOS)
-                    thumb_key = key.rsplit(".", 1)[0] + f"_thumb_{size}.webp"
-                    thumb_buf = io.BytesIO()
-                    thumb.save(thumb_buf, format="WEBP", quality=80)
-                    thumb_buf.seek(0)
-                    s3.put_object(
-                        Bucket=bucket, Key=thumb_key,
-                        Body=thumb_buf.getvalue(),
-                        ContentType="image/webp",
-                        ServerSideEncryption="AES256",
-                    )
-
-                # Compute pHash on primary image
-                if idx == 0:
-                    primary_phash = str(imagehash.phash(img))
-
-            # Update listing with processed URLs and pHash
-            updates = {"image_urls": json.dumps(processed_urls)}
-            if primary_phash:
-                updates["phash"] = primary_phash
-
-            set_clause = ", ".join(f"{k} = :{k}" for k in updates)
-            updates["id"] = listing_id
             session.execute(
-                text(f"UPDATE listings SET {set_clause} WHERE id = :id"),
-                updates,
+                text(
+                    "UPDATE listing_images "
+                    "SET s3_key_thumb_100 = :t100, s3_key_thumb_400 = :t400, s3_key_thumb_800 = :t800 "
+                    "WHERE listing_id = :listing_id AND s3_key = :s3_key"
+                ),
+                {
+                    "listing_id": listing_id,
+                    "s3_key": s3_key,
+                    "t100": thumb_keys.get(100, ""),
+                    "t400": thumb_keys.get(400, ""),
+                    "t800": thumb_keys.get(800, ""),
+                },
             )
-            session.commit()
 
-            # Check for pHash duplicates
-            if primary_phash:
+            # Check if this is the primary image (display_order=0) for pHash
+            row = session.execute(
+                text(
+                    "SELECT display_order FROM listing_images "
+                    "WHERE listing_id = :listing_id AND s3_key = :s3_key"
+                ),
+                {"listing_id": listing_id, "s3_key": s3_key},
+            ).fetchone()
+
+            if row and row[0] == 0:
+                # Compute pHash on primary image
+                primary_phash = str(imagehash.phash(img))
+                session.execute(
+                    text("UPDATE listings SET phash = :phash WHERE id = :id"),
+                    {"id": listing_id, "phash": primary_phash},
+                )
+                # Check for duplicates
                 _check_duplicates_sync(session, listing_id, primary_phash)
 
-        logger.info("Image processing complete for listing %s", listing_id)
+            session.commit()
+
+        logger.info("Image processing complete: %s for listing %s", s3_key, listing_id)
 
     except Exception as exc:
-        logger.exception("Image processing failed for listing %s", listing_id)
+        logger.exception("Image processing failed: %s for listing %s", s3_key, listing_id)
+        raise self.retry(exc=exc, countdown=30)
+
+
+# Keep backward compat alias
+@celery_app.task(name="tasks.process_listing_images", bind=True, max_retries=3)
+def process_listing_images(self, listing_id: str) -> None:
+    """Process all images for a listing (legacy entry point)."""
+    logger.info("Processing all images for listing %s", listing_id)
+
+    try:
+        from sqlalchemy import create_engine, text
+        from sqlalchemy.orm import Session
+
+        sync_url = settings.DATABASE_URL.replace("+asyncpg", "+psycopg2")
+        sync_engine = create_engine(sync_url)
+
+        with Session(sync_engine) as session:
+            rows = session.execute(
+                text(
+                    "SELECT s3_key FROM listing_images "
+                    "WHERE listing_id = :listing_id ORDER BY display_order"
+                ),
+                {"listing_id": listing_id},
+            ).fetchall()
+
+            for row in rows:
+                process_listing_image.delay(listing_id, row[0])
+
+    except Exception as exc:
+        logger.exception("Failed to queue image processing for listing %s", listing_id)
         raise self.retry(exc=exc, countdown=30)
 
 
@@ -126,7 +147,7 @@ def _check_duplicates_sync(session, listing_id: str, phash_value: str) -> None:
         text(
             "SELECT id, phash FROM listings "
             "WHERE phash IS NOT NULL AND id != :id "
-            "AND status IN ('active', 'pending_moderation')"
+            "AND status IN ('active', 'pending_review')"
         ),
         {"id": listing_id},
     ).fetchall()
@@ -141,7 +162,8 @@ def _check_duplicates_sync(session, listing_id: str, phash_value: str) -> None:
             # Flag listing for moderation review
             session.execute(
                 text(
-                    "UPDATE listings SET status = 'pending_moderation', "
+                    "UPDATE listings SET status = 'pending_review', "
+                    "moderation_status = 'flagged', "
                     "moderation_flags = :flags WHERE id = :id"
                 ),
                 {
@@ -149,7 +171,6 @@ def _check_duplicates_sync(session, listing_id: str, phash_value: str) -> None:
                     "flags": json.dumps(["phash_duplicate", f"similar_to:{row_id}"]),
                 },
             )
-            session.commit()
             break  # Flag once is enough
 
 
@@ -199,12 +220,10 @@ def sync_listing_to_meilisearch(self, listing_id: str, action: str = "index") ->
                 text(
                     "SELECT l.id, l.title_ar, l.title_en, l.description_ar, "
                     "l.description_en, l.category_id, l.condition, l.starting_price, "
-                    "l.listing_currency, l.status, l.seller_id, l.is_charity, "
-                    "l.image_urls, l.created_at, l.brand, l.city, "
-                    "l.authentication_cert_id, l.bid_count, a.ends_at "
-                    "FROM listings l "
-                    "LEFT JOIN auctions a ON a.listing_id = l.id "
-                    "WHERE l.id = :id"
+                    "l.current_price, l.status, l.seller_id, l.is_charity, "
+                    "l.is_certified, l.bid_count, l.starts_at, l.ends_at, "
+                    "l.location_city, l.location_country, l.watcher_count, l.view_count "
+                    "FROM listings l WHERE l.id = :id"
                 ),
                 {"id": listing_id},
             ).fetchone()
@@ -213,7 +232,14 @@ def sync_listing_to_meilisearch(self, listing_id: str, action: str = "index") ->
                 logger.error("Listing %s not found for Meilisearch sync", listing_id)
                 return
 
-            image_urls = json.loads(row[12]) if isinstance(row[12], str) else (row[12] or [])
+            # Get primary image
+            img_row = session.execute(
+                text(
+                    "SELECT s3_key_thumb_400 FROM listing_images "
+                    "WHERE listing_id = :id ORDER BY display_order LIMIT 1"
+                ),
+                {"id": listing_id},
+            ).fetchone()
 
             doc = {
                 "id": row[0],
@@ -223,18 +249,20 @@ def sync_listing_to_meilisearch(self, listing_id: str, action: str = "index") ->
                 "description_en": row[4],
                 "category_id": row[5],
                 "condition": row[6],
-                "starting_price": float(row[7]),
-                "listing_currency": row[8],
+                "starting_price": row[7],
+                "current_price": row[8],
                 "status": row[9],
                 "seller_id": row[10],
                 "is_charity": bool(row[11]),
-                "image_url": image_urls[0] if image_urls else "",
-                "created_at": str(row[13]),
-                "brand": row[14],
-                "city": row[15],
-                "is_authenticated": row[16] is not None,
-                "bid_count": row[17] or 0,
-                "ends_at": str(row[18]) if row[18] else None,
+                "is_certified": bool(row[12]),
+                "bid_count": row[13] or 0,
+                "starts_at": str(row[14]) if row[14] else None,
+                "ends_at": str(row[15]) if row[15] else None,
+                "location_city": row[16],
+                "location_country": row[17],
+                "watcher_count": row[18] or 0,
+                "view_count": row[19] or 0,
+                "image_url": img_row[0] if img_row and img_row[0] else "",
             }
 
             index.add_documents([doc])

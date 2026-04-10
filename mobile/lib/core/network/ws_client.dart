@@ -1,27 +1,27 @@
 import 'dart:async';
-import 'dart:convert';
+import 'dart:math';
 
-import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import 'token_storage.dart';
 
-/// WebSocket base URL — override via --dart-define=WS_BASE_URL=...
-const _defaultWsUrl = 'ws://10.0.2.2:8000/api/v1/ws'; // Android emulator
+/// Socket.IO base URL — override via --dart-define=WS_BASE_URL=...
+const _defaultBaseUrl = 'http://10.0.2.2:8000'; // Android emulator
 
-String get _wsBaseUrl =>
-    const String.fromEnvironment('WS_BASE_URL', defaultValue: _defaultWsUrl);
+String get _baseUrl =>
+    const String.fromEnvironment('WS_BASE_URL', defaultValue: _defaultBaseUrl);
 
-/// WebSocket client for real-time auction updates.
+/// Socket.IO client for real-time auction updates.
 ///
-/// Connects to `/ws/auction/{auctionId}` with JWT token as query param.
-/// Automatically reconnects on disconnect with exponential backoff.
+/// Connects to namespace '/auction' with JWT token in auth param.
+/// Automatically reconnects on disconnect with exponential backoff:
+/// 1s → 2s → 4s → 8s → 16s → 30s cap.
 class WsClient {
   WsClient({required this.tokenStorage});
 
   final TokenStorage tokenStorage;
-  WebSocketChannel? _channel;
+  io.Socket? _socket;
   StreamController<Map<String, dynamic>>? _controller;
-  Timer? _reconnectTimer;
   String? _currentAuctionId;
   int _reconnectAttempts = 0;
 
@@ -37,51 +37,87 @@ class WsClient {
 
   Future<void> _doConnect(String auctionId) async {
     final token = await tokenStorage.accessToken;
-    final uri = Uri.parse('$_wsBaseUrl/auction/$auctionId?token=$token');
 
-    _channel = WebSocketChannel.connect(uri);
-
-    _channel!.stream.listen(
-      (data) {
-        try {
-          final decoded = jsonDecode(data as String) as Map<String, dynamic>;
-          _controller?.add(decoded);
-          _reconnectAttempts = 0;
-        } catch (_) {
-          // Ignore malformed messages
-        }
-      },
-      onDone: () => _scheduleReconnect(),
-      onError: (_) => _scheduleReconnect(),
+    _socket = io.io(
+      _baseUrl,
+      io.OptionBuilder()
+          .setTransports(['websocket'])
+          .setPath('/socket.io')
+          .setAuth({'token': token, 'auction_id': auctionId})
+          .disableAutoConnect()
+          .enableReconnection()
+          .build(),
     );
+    _socket!.nsp = '/auction';
+
+    _socket!.onConnect((_) {
+      _reconnectAttempts = 0;
+      _controller?.add({'type': '_connected'});
+      // Re-fetch full state on every connect/reconnect
+      _socket!.emit('current_state', {'auction_id': auctionId});
+    });
+
+    _socket!.onDisconnect((_) {
+      _controller?.add({'type': '_disconnected'});
+    });
+
+    _socket!.onConnectError((_) {
+      _controller?.add({'type': '_disconnected'});
+      _scheduleReconnect();
+    });
+
+    // Forward all auction events to the stream
+    for (final event in [
+      'current_state',
+      'bid_update',
+      'bid_confirmed',
+      'bid_rejected',
+      'timer_extended',
+      'auction_ended',
+      'error',
+    ]) {
+      _socket!.on(event, (data) {
+        final msg = data is Map<String, dynamic>
+            ? data
+            : <String, dynamic>{};
+        msg['type'] = event;
+        _controller?.add(msg);
+      });
+    }
+
+    _socket!.connect();
   }
 
-  /// Send a JSON message through the WebSocket.
+  /// Emit an event through the Socket.IO connection.
+  void emit(String event, Map<String, dynamic> data) {
+    _socket?.emit(event, data);
+  }
+
+  /// Send a JSON message (legacy compat — prefer emit).
   void send(Map<String, dynamic> message) {
-    _channel?.sink.add(jsonEncode(message));
+    final type = message.remove('type') as String? ?? 'message';
+    _socket?.emit(type, message);
   }
 
   /// Disconnect and clean up.
   void disconnect() {
-    _reconnectTimer?.cancel();
-    _channel?.sink.close();
+    _socket?.dispose();
     _controller?.close();
-    _channel = null;
+    _socket = null;
     _controller = null;
     _currentAuctionId = null;
   }
 
+  /// Exponential backoff: 1s → 2s → 4s → 8s → 16s → 30s cap.
   void _scheduleReconnect() {
     if (_currentAuctionId == null || (_controller?.isClosed ?? true)) return;
 
     _reconnectAttempts++;
-    final delay = Duration(
-      seconds: (_reconnectAttempts * 2).clamp(1, 30),
-    );
+    final delaySec = min(pow(2, _reconnectAttempts - 1).toInt(), 30);
+    final delay = Duration(seconds: delaySec);
 
-    _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(delay, () {
-      if (_currentAuctionId != null) {
+    Future.delayed(delay, () {
+      if (_currentAuctionId != null && !(_controller?.isClosed ?? true)) {
         _doConnect(_currentAuctionId!);
       }
     });

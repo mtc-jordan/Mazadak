@@ -4,14 +4,15 @@ from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.services.auth.dependencies import get_current_user, require_kyc_verified
+from app.core.types import UUIDPath
+from app.services.auth.dependencies import get_current_user, require_kyc
 from app.services.auth.models import User
 from app.services.listing.models import Listing
 from app.services.listing.service import get_listing
 
 
 async def get_listing_or_404(
-    listing_id: str,
+    listing_id: UUIDPath,
     db: AsyncSession = Depends(get_db),
 ) -> Listing:
     listing = await get_listing(listing_id, db)
@@ -25,7 +26,7 @@ async def get_listing_or_404(
 
 async def get_own_listing(
     listing: Listing = Depends(get_listing_or_404),
-    user: User = Depends(require_kyc_verified),
+    user: User = Depends(require_kyc),
 ) -> Listing:
     """Ensure the current user owns this listing."""
     if listing.seller_id != user.id:

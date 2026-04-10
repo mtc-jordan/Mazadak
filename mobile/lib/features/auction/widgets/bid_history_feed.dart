@@ -10,6 +10,9 @@ const _newBidFlash = Color(0xFFD6E4FF); // blue flash
 const _ownBidColor = Color(0xFFD5F5E3);  // green highlight
 const _pendingBidColor = Color(0xFFFFF3CD); // amber pending
 
+/// Stagger delay between each row on initial entry.
+const _staggerDelay = Duration(milliseconds: 30);
+
 /// Bid history feed with animated insertions.
 ///
 /// SDD §7.2:
@@ -17,35 +20,94 @@ const _pendingBidColor = Color(0xFFFFF3CD); // amber pending
 /// - Each row: SlideTransition(Offset(0,-1)→Offset.zero) + FadeTransition, 180ms
 /// - New bid row: blue flash background fades in 800ms
 /// - Max 50 items, masked bidder names, own bids highlighted green
+/// - On auction room entry: staggers in from bottom, 30ms per row
 class BidHistoryFeed extends StatefulWidget {
   const BidHistoryFeed({
     super.key,
     required this.bids,
     required this.currency,
     this.locale = 'ar_JO',
+    this.animateInitialItems = true,
   });
 
   final List<BidEntry> bids;
   final String currency;
   final String locale;
 
+  /// When true, initial items stagger in from bottom on first build.
+  final bool animateInitialItems;
+
   @override
   State<BidHistoryFeed> createState() => _BidHistoryFeedState();
 }
 
-class _BidHistoryFeedState extends State<BidHistoryFeed> {
+class _BidHistoryFeedState extends State<BidHistoryFeed>
+    with TickerProviderStateMixin {
   final _listKey = GlobalKey<AnimatedListState>();
   List<BidEntry> _displayedBids = [];
+  bool _initialAnimationDone = false;
+
+  // Stagger controllers for initial entry
+  final List<AnimationController> _staggerControllers = [];
+  final List<Animation<double>> _staggerAnimations = [];
 
   @override
   void initState() {
     super.initState();
-    _displayedBids = List.of(widget.bids);
+    if (widget.animateInitialItems && widget.bids.isNotEmpty) {
+      // Start with empty list, then stagger items in
+      _displayedBids = [];
+      _scheduleStaggeredEntry();
+    } else {
+      _displayedBids = List.of(widget.bids);
+      _initialAnimationDone = true;
+    }
+  }
+
+  void _scheduleStaggeredEntry() {
+    final bids = widget.bids;
+    // Create stagger animation controllers for each initial bid
+    for (var i = 0; i < bids.length; i++) {
+      final controller = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 250),
+      );
+      final animation = CurvedAnimation(
+        parent: controller,
+        curve: Curves.easeOutCubic,
+      );
+      _staggerControllers.add(controller);
+      _staggerAnimations.add(animation);
+    }
+
+    // Stagger the insertions: 30ms delay per row
+    Future<void> staggerInserts() async {
+      for (var i = 0; i < bids.length; i++) {
+        if (!mounted) return;
+        _displayedBids.add(bids[i]);
+        _listKey.currentState?.insertItem(
+          _displayedBids.length - 1,
+          duration: const Duration(milliseconds: 250),
+        );
+        if (i < bids.length - 1) {
+          await Future.delayed(_staggerDelay);
+        }
+      }
+      if (mounted) {
+        setState(() => _initialAnimationDone = true);
+      }
+    }
+
+    // Kick off after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      staggerInserts();
+    });
   }
 
   @override
   void didUpdateWidget(BidHistoryFeed old) {
     super.didUpdateWidget(old);
+    if (!_initialAnimationDone) return;
 
     final newBids = widget.bids;
     final oldBids = _displayedBids;
@@ -75,6 +137,14 @@ class _BidHistoryFeedState extends State<BidHistoryFeed> {
   }
 
   @override
+  void dispose() {
+    for (final c in _staggerControllers) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return AnimatedList(
       key: _listKey,
@@ -82,11 +152,40 @@ class _BidHistoryFeedState extends State<BidHistoryFeed> {
       padding: AppSpacing.verticalXs,
       itemBuilder: (context, index, animation) {
         if (index >= _displayedBids.length) return const SizedBox.shrink();
+
+        // During staggered initial entry, rows slide in from bottom
+        if (!_initialAnimationDone) {
+          return _buildStaggerItem(_displayedBids[index], animation);
+        }
+
         return _buildItem(_displayedBids[index], animation);
       },
     );
   }
 
+  /// Staggered entry: slide from bottom + fade (initial load).
+  Widget _buildStaggerItem(BidEntry bid, Animation<double> animation) {
+    return SlideTransition(
+      position: Tween<Offset>(
+        begin: const Offset(0, 0.3),
+        end: Offset.zero,
+      ).animate(CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+      )),
+      child: FadeTransition(
+        opacity: animation,
+        child: _BidRow(
+          bid: bid,
+          currency: widget.currency,
+          locale: widget.locale,
+          suppressFlash: true, // no flash on initial load
+        ),
+      ),
+    );
+  }
+
+  /// Standard new-bid entry: slide from top + fade.
   Widget _buildItem(BidEntry bid, Animation<double> animation) {
     return SlideTransition(
       position: Tween<Offset>(
@@ -114,11 +213,13 @@ class _BidRow extends StatefulWidget {
     required this.bid,
     required this.currency,
     required this.locale,
+    this.suppressFlash = false,
   });
 
   final BidEntry bid;
   final String currency;
   final String locale;
+  final bool suppressFlash;
 
   @override
   State<_BidRow> createState() => _BidRowState();
@@ -143,15 +244,19 @@ class _BidRowState extends State<_BidRow> with SingleTickerProviderStateMixin {
             : _newBidFlash;
 
     _flashAnimation = ColorTween(
-      begin: baseColor,
-      end: widget.bid.isOwn ? _ownBidColor.withOpacity(0.3) : Colors.transparent,
+      begin: widget.suppressFlash ? Colors.transparent : baseColor,
+      end: widget.bid.isOwn ? _ownBidColor.withValues(alpha: 0.3) : Colors.transparent,
     ).animate(CurvedAnimation(
       parent: _flashController,
       curve: Curves.easeOut,
     ));
 
-    // Trigger flash on mount (new bid)
-    _flashController.forward();
+    // Trigger flash on mount (new bid) — skip for initial stagger
+    if (!widget.suppressFlash) {
+      _flashController.forward();
+    } else {
+      _flashController.value = 1.0; // jump to end
+    }
   }
 
   @override
@@ -172,7 +277,14 @@ class _BidRowState extends State<_BidRow> with SingleTickerProviderStateMixin {
       animation: _flashAnimation,
       builder: (context, child) {
         return Container(
-          color: _flashAnimation.value,
+          decoration: BoxDecoration(
+            color: _flashAnimation.value,
+            border: widget.bid.isOwn
+                ? const Border(
+                    left: BorderSide(color: AppColors.emerald, width: 2),
+                  )
+                : null,
+          ),
           padding: const EdgeInsetsDirectional.symmetric(
             horizontal: AppSpacing.md,
             vertical: AppSpacing.sm,
@@ -188,8 +300,8 @@ class _BidRowState extends State<_BidRow> with SingleTickerProviderStateMixin {
             height: 32,
             decoration: BoxDecoration(
               color: widget.bid.isOwn
-                  ? AppColors.emerald.withOpacity(0.15)
-                  : AppColors.navy.withOpacity(0.08),
+                  ? AppColors.emerald.withValues(alpha: 0.15)
+                  : AppColors.navy.withValues(alpha: 0.08),
               shape: BoxShape.circle,
             ),
             child: Icon(

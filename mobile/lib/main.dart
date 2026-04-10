@@ -1,3 +1,5 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -8,8 +10,60 @@ import 'core/l10n/locale_provider.dart';
 import 'core/router.dart';
 import 'core/theme/theme.dart';
 
+/// Global navigator key for routing from FCM handlers.
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+/// Handle FCM messages when app is in background/terminated.
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
+}
+
+/// Route to the correct screen based on FCM notification data.
+void _handleNotificationNavigation(RemoteMessage message) {
+  final data = message.data;
+  final type = data['type'] as String? ?? '';
+  final id = data['resource_id'] as String?;
+  if (id == null) return;
+
+  final context = navigatorKey.currentContext;
+  if (context == null) return;
+
+  if (type == 'outbid') {
+    HapticFeedback.heavyImpact();
+  }
+
+  if (type.startsWith('bid') || type.contains('auction')) {
+    Navigator.of(context).pushNamed('/auction/$id');
+  } else if (type.startsWith('escrow')) {
+    Navigator.of(context).pushNamed('/escrow/$id');
+  } else if (type.contains('listing')) {
+    Navigator.of(context).pushNamed('/listing/$id');
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize Firebase (gracefully skip if google-services.json missing)
+  try {
+    await Firebase.initializeApp();
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+    // Handle notification taps when app is in background
+    FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationNavigation);
+
+    // Handle notification tap that launched the app from terminated state
+    final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
+    if (initialMessage != null) {
+      // Defer navigation until after app is built
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _handleNotificationNavigation(initialMessage);
+      });
+    }
+  } catch (e) {
+    debugPrint('Firebase init skipped: $e');
+  }
 
   // Lock to portrait orientation
   await SystemChrome.setPreferredOrientations([

@@ -15,8 +15,8 @@ Covers:
 
 from __future__ import annotations
 
-import json
 import sys
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch, call
@@ -54,10 +54,10 @@ async def search_db():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     event.listen(engine.sync_engine, "connect", _register_sqlite_functions)
 
-    # Patch ARRAY/JSONB columns for SQLite compat
-    image_col = Listing.__table__.c.image_urls
-    orig_type = image_col.type
-    image_col.type = Text()
+    # Patch JSONB columns for SQLite compat
+    mod_flags_col = Listing.__table__.c.moderation_flags
+    orig_type = mod_flags_col.type
+    mod_flags_col.type = Text()
 
     try:
         async with engine.begin() as conn:
@@ -66,7 +66,7 @@ async def search_db():
                 tables=[Listing.__table__],
             )
     finally:
-        image_col.type = orig_type
+        mod_flags_col.type = orig_type
 
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as session:
@@ -78,6 +78,7 @@ async def _create_listing(db: AsyncSession, **overrides) -> str:
     from app.services.listing.models import Listing
 
     lid = overrides.pop("id", str(uuid4()))
+    _now = datetime.now(timezone.utc)
     defaults = dict(
         id=lid,
         seller_id=str(uuid4()),
@@ -87,15 +88,16 @@ async def _create_listing(db: AsyncSession, **overrides) -> str:
         description_en="New iPhone in excellent condition",
         category_id=1,
         condition="new",
-        starting_price=350.0,
-        listing_currency="JOD",
+        starting_price=35000,
         status="active",
         is_charity=False,
-        image_urls=json.dumps(["img/phone1.webp"]),
         bid_count=5,
-        brand="Apple",
-        city="Amman",
-        authentication_cert_id=str(uuid4()),
+        location_city="Amman",
+        location_country="JO",
+        is_certified=True,
+        starts_at=_now,
+        ends_at=_now + timedelta(days=7),
+        moderation_flags="[]",
     )
     defaults.update(overrides)
     db.add(Listing(**defaults))
@@ -497,8 +499,8 @@ class TestILikeFallback:
     async def test_fallback_on_meilisearch_failure(self, search_db):
         db, factory = search_db
 
-        lid = await _create_listing(db, title_ar="ايفون 15 برو", title_en=None, description_ar="هاتف ايفون", status="active")
-        await _create_listing(db, title_ar="سامسونج جالاكسي", title_en=None, description_ar="هاتف سامسونج", status="active")
+        lid = await _create_listing(db, title_ar="ايفون 15 برو", title_en="iPhone 15 Pro", description_ar="هاتف ايفون", status="active")
+        await _create_listing(db, title_ar="سامسونج جالاكسي", title_en="Samsung Galaxy", description_ar="هاتف سامسونج", status="active")
         await db.commit()
 
         from app.services.search.schemas import SearchRequest
@@ -541,8 +543,8 @@ class TestILikeFallback:
     async def test_fallback_applies_city_filter(self, search_db):
         db, factory = search_db
 
-        await _create_listing(db, title_ar="ايفون", city="Amman", status="active")
-        await _create_listing(db, title_ar="ايفون", city="Irbid", status="active")
+        await _create_listing(db, title_ar="ايفون", location_city="Amman", status="active")
+        await _create_listing(db, title_ar="ايفون", location_city="Irbid", status="active")
         await db.commit()
 
         from app.services.search.schemas import SearchRequest
@@ -579,17 +581,17 @@ class TestILikeFallback:
             resp = await search_listings(SearchRequest(q="ايفون", price_max=500))
 
         assert resp.total_hits == 1
-        assert resp.hits[0].starting_price == 100.0
+        assert resp.hits[0].starting_price == 100
 
     @pytest.mark.asyncio
     async def test_fallback_is_authenticated_filter(self, search_db):
         db, factory = search_db
 
         await _create_listing(
-            db, title_ar="ايفون موثق", authentication_cert_id=str(uuid4()), status="active",
+            db, title_ar="ايفون موثق", is_certified=True, status="active",
         )
         await _create_listing(
-            db, title_ar="ايفون عادي", authentication_cert_id=None, status="active",
+            db, title_ar="ايفون عادي", is_certified=False, status="active",
         )
         await db.commit()
 

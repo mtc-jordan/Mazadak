@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.types import UUIDPath
 from app.services.auth.dependencies import get_current_user
 from app.services.auth.models import User
 from app.services.escrow import schemas, service
@@ -28,8 +29,8 @@ async def confirm_receipt(
     if user.id != escrow.winner_id:
         raise HTTPException(status_code=403, detail="Only buyer can confirm receipt")
     return await service.transition_escrow(
-        escrow.id, "released", user.id, ActorType.BUYER,
-        "buyer.confirm_receipt", None, db=db,
+        escrow.id, "released", user.id, ActorType.BUYER.value,
+        "buyer.confirm_receipt", {}, db,
     )
 
 
@@ -46,17 +47,17 @@ async def upload_tracking(
     escrow.tracking_number = body.tracking_number
     escrow.carrier = body.carrier
     return await service.transition_escrow(
-        escrow.id, "in_transit", user.id, ActorType.SELLER,
+        escrow.id, "in_transit", user.id, ActorType.SELLER.value,
         "seller.upload_tracking",
         {"tracking_number": body.tracking_number, "carrier": body.carrier},
-        db=db,
+        db,
     )
 
 
 @router.post("/disputes", response_model=schemas.EscrowOut, status_code=201)
 async def file_dispute(
     body: schemas.FileDisputeRequest,
-    escrow_id: str,
+    escrow_id: UUIDPath,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -65,8 +66,8 @@ async def file_dispute(
     if not escrow:
         raise HTTPException(status_code=404)
     return await service.transition_escrow(
-        escrow.id, "disputed", user.id, ActorType.BUYER,
+        escrow.id, "disputed", user.id, ActorType.BUYER.value,
         "buyer.file_dispute",
         {"reason": body.reason, "evidence": body.evidence_s3_keys},
-        db=db,
+        db,
     )

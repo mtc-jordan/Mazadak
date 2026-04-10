@@ -1,0 +1,138 @@
+services:
+  # ─────────────────────────────────────────────────────────
+  # Infrastructure
+  # ─────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mzadak
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  meilisearch:
+    image: getmeili/meilisearch:latest
+    ports:
+      - "7700:7700"
+    environment:
+      MEILI_MASTER_KEY: ${MEILISEARCH_MASTER_KEY:-mzadak_meili_dev_key}
+      MEILI_ENV: development
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meilisearch_data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─────────────────────────────────────────────────────────
+  # Backend API (FastAPI + hot-reload)
+  # ─────────────────────────────────────────────────────────
+
+  backend:
+    build:
+      context: ../../backend
+      target: development
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../../backend/.env
+    volumes:
+      - ../../backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────────────────────
+  # Celery Worker
+  # ─────────────────────────────────────────────────────────
+
+  celery-worker:
+    build:
+      context: ../../backend
+      target: development
+    command: >
+      celery -A app.core.celery:celery_app worker
+      --loglevel=info
+      --concurrency=2
+      -Q default,bids,notifications,escrow
+    env_file:
+      - ../../backend/.env
+    volumes:
+      - ../../backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────────────────────
+  # Celery Beat (periodic task scheduler)
+  # ─────────────────────────────────────────────────────────
+
+  celery-beat:
+    build:
+      context: ../../backend
+      target: development
+    command: >
+      celery -A app.core.celery:celery_app beat
+      --loglevel=info
+    env_file:
+      - ../../backend/.env
+    volumes:
+      - ../../backend:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────────────────────
+  # Flower (Celery monitoring UI)
+  # ─────────────────────────────────────────────────────────
+
+  flower:
+    build:
+      context: ../../backend
+      target: development
+    command: >
+      celery -A app.core.celery:celery_app flower
+      --port=5555
+      --broker_api=redis://redis:6379/1
+    ports:
+      - "5555:5555"
+    env_file:
+      - ../../backend/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  meilisearch_data:

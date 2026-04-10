@@ -11,6 +11,9 @@ abstract final class AppSpacing {
   static const double xxl = 40;
   static const double xxxl = 56;
 
+  /// Gap between home-feed sections.
+  static const double sectionGap = 28;
+
   // ── Convenience EdgeInsets (RTL-safe: start/end, not left/right) ─
 
   static const horizontalXs  = EdgeInsetsDirectional.symmetric(horizontal: xs);

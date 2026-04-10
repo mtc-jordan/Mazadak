@@ -1,35 +1,44 @@
 """
-Listing domain models — SDD §4.2: listings, listing_images, authentication_certs.
+Listing domain models — SDD §4.2: listings, listing_images.
+
+Maps 1:1 to 0001_initial_schema migration tables.
+All prices stored as INTEGER cents (1 JOD = 1000 fils).
 """
 
-import enum
-from uuid import uuid4
+from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, Integer, Numeric, String, Text, text
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+import enum
+from datetime import datetime
+
+from sqlalchemy import (
+    Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, text,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, TimestampMixin
 
 
+# ── Enums (must match CREATE TYPE in migration) ────────────────
+
+class ListingCondition(str, enum.Enum):
+    BRAND_NEW = "brand_new"
+    LIKE_NEW = "like_new"
+    VERY_GOOD = "very_good"
+    GOOD = "good"
+    ACCEPTABLE = "acceptable"
+
+
 class ListingStatus(str, enum.Enum):
     DRAFT = "draft"
-    PENDING_MODERATION = "pending_moderation"
-    SCHEDULED = "scheduled"
+    PENDING_REVIEW = "pending_review"
     ACTIVE = "active"
     ENDED = "ended"
-    SOLD = "sold"
-    UNSOLD = "unsold"
     CANCELLED = "cancelled"
+    RELISTED = "relisted"
 
 
-class ItemCondition(str, enum.Enum):
-    NEW = "new"
-    LIKE_NEW = "like_new"
-    GOOD = "good"
-    FAIR = "fair"
-    FOR_PARTS = "for_parts"
-
+# ── Listing ────────────────────────────────────────────────────
 
 class Listing(Base, TimestampMixin):
     __tablename__ = "listings"
@@ -38,63 +47,109 @@ class Listing(Base, TimestampMixin):
         UUID(as_uuid=False), primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
-    seller_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
+    seller_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), nullable=False, index=True,
+    )
+    category_id: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    title_ar: Mapped[str] = mapped_column(Text, nullable=False)
-    title_en: Mapped[str | None] = mapped_column(Text)
-    description_ar: Mapped[str] = mapped_column(Text, nullable=False)
+    title_en: Mapped[str] = mapped_column(String(200), nullable=False)
+    title_ar: Mapped[str] = mapped_column(String(200), nullable=False)
     description_en: Mapped[str | None] = mapped_column(Text)
+    description_ar: Mapped[str | None] = mapped_column(Text)
 
-    category_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     condition: Mapped[str] = mapped_column(String(20), nullable=False)
-
-    starting_price: Mapped[float] = mapped_column(Numeric(10, 3), nullable=False)
-    reserve_price: Mapped[float | None] = mapped_column(Numeric(10, 3))
-    buy_it_now_price: Mapped[float | None] = mapped_column(Numeric(10, 3))
-    listing_currency: Mapped[str] = mapped_column(Text, default="JOD", nullable=False)
-
-    duration_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
-
     status: Mapped[str] = mapped_column(
-        String(25), default=ListingStatus.DRAFT.value, nullable=False, index=True,
+        String(25), nullable=False, server_default="draft", index=True,
     )
 
-    ai_generated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    ai_price_low: Mapped[float | None] = mapped_column(Numeric(10, 3))
-    ai_price_high: Mapped[float | None] = mapped_column(Numeric(10, 3))
-    phash: Mapped[str | None] = mapped_column(Text)
-    moderation_score: Mapped[float | None] = mapped_column(Float)
-    moderation_flags: Mapped[str | None] = mapped_column(Text)  # JSON-serialised list
+    is_certified: Mapped[bool] = mapped_column(
+        Boolean, server_default="false", nullable=False,
+    )
+    is_charity: Mapped[bool] = mapped_column(
+        Boolean, server_default="false", nullable=False,
+    )
+    ngo_id: Mapped[int | None] = mapped_column(Integer)
 
-    authentication_cert_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False))
+    # -- Prices in INTEGER cents ---------------------------------
+    starting_price: Mapped[int] = mapped_column(Integer, nullable=False)
+    reserve_price: Mapped[int | None] = mapped_column(Integer)
+    buy_it_now_price: Mapped[int | None] = mapped_column(Integer)
+    current_price: Mapped[int | None] = mapped_column(Integer)
+    bid_count: Mapped[int] = mapped_column(
+        Integer, server_default="0", nullable=False,
+    )
+    watcher_count: Mapped[int] = mapped_column(
+        Integer, server_default="0", nullable=False,
+    )
+    min_increment: Mapped[int] = mapped_column(
+        Integer, server_default="2500", nullable=False,
+    )
 
-    brand: Mapped[str | None] = mapped_column(Text)
-    city: Mapped[str | None] = mapped_column(String(50))
+    # -- Schedule ------------------------------------------------
+    starts_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+    ends_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    extension_count: Mapped[int] = mapped_column(
+        Integer, server_default="0", nullable=False,
+    )
 
-    is_charity: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    ngo_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False))
+    # -- Location ------------------------------------------------
+    location_city: Mapped[str | None] = mapped_column(String(100))
+    location_country: Mapped[str] = mapped_column(
+        String(5), server_default="JO", nullable=False,
+    )
 
-    # Store as JSON text for SQLite compat; PostgreSQL migration uses ARRAY
-    image_urls: Mapped[str | None] = mapped_column(Text)  # JSON array string
-    bid_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # -- AI / moderation -----------------------------------------
+    ai_generated: Mapped[bool] = mapped_column(
+        Boolean, server_default="false", nullable=False,
+    )
+    ai_category_confidence: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    moderation_score: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    moderation_status: Mapped[str] = mapped_column(
+        String(50), server_default="pending", nullable=False,
+    )
+    moderation_flags: Mapped[dict] = mapped_column(
+        JSONB, server_default="'[]'", nullable=False,
+    )
+    phash: Mapped[str | None] = mapped_column(String(64))
+    view_count: Mapped[int] = mapped_column(
+        Integer, server_default="0", nullable=False,
+    )
 
-    published_at: Mapped[str | None] = mapped_column()
+    # -- Relationships -------------------------------------------
+    images: Mapped[list["ListingImage"]] = relationship(
+        back_populates="listing",
+        lazy="selectin",
+        order_by="ListingImage.display_order",
+        cascade="all, delete-orphan",
+    )
 
 
-# ── Helper to serialise / deserialise image_urls ──────────────
+# ── Listing Images ─────────────────────────────────────────────
 
-import json as _json
+class ListingImage(Base):
+    __tablename__ = "listing_images"
 
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    listing_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("listings.id"), nullable=False, index=True,
+    )
+    s3_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    s3_key_thumb_100: Mapped[str | None] = mapped_column(String(500))
+    s3_key_thumb_400: Mapped[str | None] = mapped_column(String(500))
+    s3_key_thumb_800: Mapped[str | None] = mapped_column(String(500))
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("now()"),
+        nullable=False,
+    )
 
-def get_image_urls(listing: Listing) -> list[str]:
-    """Deserialise image_urls JSON text → list."""
-    if not listing.image_urls:
-        return []
-    if isinstance(listing.image_urls, list):
-        return listing.image_urls
-    return _json.loads(listing.image_urls)
-
-
-def set_image_urls(listing: Listing, urls: list[str]) -> None:
-    """Serialise list → JSON text for storage."""
-    listing.image_urls = _json.dumps(urls)
+    listing: Mapped["Listing"] = relationship(back_populates="images")
