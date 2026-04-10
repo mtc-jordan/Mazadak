@@ -77,6 +77,11 @@ def _room(auction_id: str) -> str:
     return f"auction_{auction_id}"
 
 
+def _cents_to_jod(cents: int) -> float:
+    """Convert integer cents to JOD float for client payloads."""
+    return round(cents / 100, 2)
+
+
 def mask_user_id(user_id: str) -> str:
     """Privacy mask: first char + '***' + last 3 chars.
 
@@ -103,13 +108,13 @@ async def _build_current_state(auction_id: str, redis) -> dict | None:
 
     return {
         "auction_id": auction_id,
-        "current_price": int(price) if price else 0,
+        "current_price": _cents_to_jod(int(price)) if price else 0,
         "status": status,
         "bid_count": int(bid_count) if bid_count else 0,
         "watcher_count": int(watcher_ct) if watcher_ct else 0,
         "extension_count": int(ext_ct) if ext_ct else 0,
         "last_bidder": mask_user_id(last_bidder) if last_bidder else None,
-        "min_increment": int(min_inc) if min_inc else 0,
+        "min_increment": _cents_to_jod(int(min_inc)) if min_inc else 0,
         "remaining_seconds": root_ttl if root_ttl > 0 else 0,
     }
 
@@ -133,7 +138,7 @@ async def _get_recent_bids(auction_id: str, limit: int = 20) -> list[dict]:
                 {
                     "id": b.id,
                     "user_id": mask_user_id(str(b.user_id)),
-                    "amount": int(b.amount),
+                    "amount": _cents_to_jod(int(b.amount)),
                     "currency": b.currency,
                     "created_at": str(b.created_at),
                 }
@@ -318,21 +323,22 @@ class AuctionNamespace(socketio.AsyncNamespace):
                 "reason": result.rejection_reason,
                 "message": f"Bid rejected: {result.rejection_reason}",
                 "auction_id": auction_id,
-                "amount": amount,
+                "amount": _cents_to_jod(amount),
             }
             if result.min_required is not None:
-                rejection["min_required"] = result.min_required
+                rejection["min_required"] = _cents_to_jod(result.min_required)
             await self.emit("bid_rejected", rejection, to=sid)
             return
 
         # ── ACCEPTED ─────────────────────────────────────────────
         bid_count_str = await redis.get(_k(auction_id, "bid_count"))
         bid_count = int(bid_count_str) if bid_count_str else 0
+        price_jod = _cents_to_jod(result.new_price)
 
         # 1. bid_confirmed to submitting socket only
         await self.emit("bid_confirmed", {
             "auction_id": auction_id,
-            "amount": result.new_price,
+            "amount": price_jod,
             "bid_count": bid_count,
             "currency": "JOD",
             "timestamp": time.time(),
@@ -342,7 +348,7 @@ class AuctionNamespace(socketio.AsyncNamespace):
         bid_payload = {
             "auction_id": auction_id,
             "user_id": mask_user_id(user_id),
-            "amount": result.new_price,
+            "amount": price_jod,
             "bid_count": bid_count,
             "currency": "JOD",
             "timestamp": time.time(),
@@ -366,7 +372,7 @@ class AuctionNamespace(socketio.AsyncNamespace):
 
             timer_payload = {
                 "auction_id": auction_id,
-                "new_ttl": result.new_ttl,
+                "remaining_seconds": result.new_ttl,
                 "extension_count": ext_count,
                 "extension_seconds": 180,
             }

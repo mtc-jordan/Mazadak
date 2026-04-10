@@ -36,6 +36,9 @@ class WsClient {
   }
 
   Future<void> _doConnect(String auctionId) async {
+    // Dispose previous socket on reconnect to prevent leaks
+    _socket?.dispose();
+
     final token = await tokenStorage.accessToken;
 
     _socket = io.io(
@@ -45,7 +48,7 @@ class WsClient {
           .setPath('/socket.io')
           .setAuth({'token': token, 'auction_id': auctionId})
           .disableAutoConnect()
-          .enableReconnection()
+          .disableReconnection()
           .build(),
     );
     _socket!.nsp = '/auction';
@@ -53,12 +56,12 @@ class WsClient {
     _socket!.onConnect((_) {
       _reconnectAttempts = 0;
       _controller?.add({'type': '_connected'});
-      // Re-fetch full state on every connect/reconnect
-      _socket!.emit('current_state', {'auction_id': auctionId});
+      // Server emits current_state automatically on connect — no client emit needed
     });
 
     _socket!.onDisconnect((_) {
       _controller?.add({'type': '_disconnected'});
+      _scheduleReconnect();
     });
 
     _socket!.onConnectError((_) {
@@ -73,7 +76,9 @@ class WsClient {
       'bid_confirmed',
       'bid_rejected',
       'timer_extended',
+      'watcher_update',
       'auction_ended',
+      'pong',
       'error',
     ]) {
       _socket!.on(event, (data) {

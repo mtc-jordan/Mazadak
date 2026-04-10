@@ -225,6 +225,10 @@ class AuctionNotifier extends StateNotifier<AuctionState> {
         _handleBidRejected(msg);
       case 'timer_extended':
         _handleTimerExtended(msg);
+      case 'watcher_update':
+        state = state.copyWith(
+          watcherCount: msg['watcher_count'] as int? ?? state.watcherCount,
+        );
       case 'auction_ended':
         state = state.copyWith(
           status: 'ended',
@@ -265,7 +269,7 @@ class AuctionNotifier extends StateNotifier<AuctionState> {
       currentPrice: newPrice,
       bidCount: msg['bid_count'] as int? ?? state.bidCount + 1,
       lastBidder: bidderId,
-      timerRemaining: msg['timer_remaining'] as int?,
+      timerRemaining: msg['remaining_seconds'] as int?,
       bids: bids,
     );
   }
@@ -288,7 +292,7 @@ class AuctionNotifier extends StateNotifier<AuctionState> {
     _timerExtendedDismiss?.cancel();
 
     state = state.copyWith(
-      endsAt: msg['new_ends_at'] as String?,
+      timerRemaining: msg['remaining_seconds'] as int?,
       extensionCount:
           msg['extension_count'] as int? ?? state.extensionCount + 1,
       timerExtended: true,
@@ -323,7 +327,7 @@ class AuctionNotifier extends StateNotifier<AuctionState> {
     state = state.copyWith(
       currentPrice: (msg['current_price'] as num? ?? msg['price'] as num?)?.toDouble() ?? state.currentPrice,
       bidCount: msg['bid_count'] as int? ?? 0,
-      timerRemaining: msg['timer_remaining'] as int?,
+      timerRemaining: msg['remaining_seconds'] as int?,
       endsAt: msg['ends_at'] as String?,
       status: msg['status'] as String? ?? state.status,
       winnerId: msg['winner_id'] as String?,
