@@ -56,7 +56,7 @@ async def list_my_auctions(
             title_ar=listing.title_ar,
             title_en=listing.title_en,
             image_url=image_url,
-            starting_price=float(listing.starting_price),
+            starting_price=listing.starting_price / 100,  # cents → JOD
             current_price=float(auction.current_price),
             currency="JOD",
             bid_count=auction.bid_count,
@@ -66,10 +66,11 @@ async def list_my_auctions(
             is_live=auction.status == AuctionStatus.ACTIVE,
         )
 
-        # Categorise
+        # Categorise — won takes priority to avoid duplicates when
+        # user is both seller and winner of the same auction.
         if auction.winner_id == user.id:
             won.append(item)
-        if listing.seller_id == user.id:
+        elif listing.seller_id == user.id:
             if auction.status == AuctionStatus.ACTIVE:
                 active.append(item)
             elif auction.status == AuctionStatus.ENDED:

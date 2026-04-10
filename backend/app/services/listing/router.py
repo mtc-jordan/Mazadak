@@ -167,17 +167,20 @@ async def list_my_listings(
         "ended": [],
         "draft": [],
         "pending": [],
+        "cancelled": [],
     }
     for lst in listings:
         resp = _listing_to_response(lst, seller=user)
         if lst.status == ListingStatus.ACTIVE:
             groups["active"].append(resp)
-        elif lst.status == ListingStatus.ENDED:
+        elif lst.status in (ListingStatus.ENDED, ListingStatus.RELISTED):
             groups["ended"].append(resp)
         elif lst.status == ListingStatus.DRAFT:
             groups["draft"].append(resp)
         elif lst.status == ListingStatus.PENDING_REVIEW:
             groups["pending"].append(resp)
+        elif lst.status == ListingStatus.CANCELLED:
+            groups["cancelled"].append(resp)
 
     return schemas.MyListingsResponse(**groups)
 

@@ -92,8 +92,10 @@ class _SearchFiltersSheetState extends State<SearchFiltersSheet> {
     // Parse price fields (JOD -> cents)
     final minText = _priceMinController.text.trim();
     final maxText = _priceMaxController.text.trim();
-    final priceMin = minText.isNotEmpty ? (int.tryParse(minText) ?? 0) * 100 : null;
-    final priceMax = maxText.isNotEmpty ? (int.tryParse(maxText) ?? 0) * 100 : null;
+    final minParsed = minText.isNotEmpty ? int.tryParse(minText) : null;
+    final maxParsed = maxText.isNotEmpty ? int.tryParse(maxText) : null;
+    final priceMin = minParsed != null ? minParsed * 100 : null;
+    final priceMax = maxParsed != null ? maxParsed * 100 : null;
 
     final filters = _draft.copyWith(
       priceMin: priceMin,

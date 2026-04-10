@@ -223,6 +223,7 @@ class MyListingsResponse(BaseModel):
     ended: list[ListingResponse] = []
     draft: list[ListingResponse] = []
     pending: list[ListingResponse] = []
+    cancelled: list[ListingResponse] = []
 
 
 # ── Paginated list response ──────────────────────────────────

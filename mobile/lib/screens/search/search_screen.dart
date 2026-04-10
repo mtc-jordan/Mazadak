@@ -44,8 +44,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   static const _sortOptions = [
     (key: 'ends_asc', label: 'Ending soon'),
     (key: 'price_asc', label: 'Lowest price'),
-    (key: 'bids_desc', label: 'Most bids'),
-    (key: 'created_desc', label: 'Newest'),
+    (key: 'bid_count_desc', label: 'Most bids'),
   ];
   static const _recentSearchesKey = 'mzadak_recent_searches';
 
@@ -221,7 +220,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                       GestureDetector(
                         onTap: () => context.pop(),
                         child: const Padding(
-                          padding: EdgeInsets.only(right: 8),
+                          padding: EdgeInsetsDirectional.only(end: 8),
                           child: Icon(
                             Icons.arrow_back_rounded,
                             color: AppColors.navy,
@@ -338,7 +337,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             color: AppColors.mist,
           ),
           prefixIcon: const Padding(
-            padding: EdgeInsets.only(left: 12, right: 4),
+            padding: EdgeInsetsDirectional.only(start: 12, end: 4),
             child:
                 Icon(Icons.search_rounded, color: AppColors.navy, size: 20),
           ),
@@ -358,7 +357,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               GestureDetector(
                 onTap: _openFilterSheet,
                 child: Padding(
-                  padding: const EdgeInsets.only(right: 12, left: 4),
+                  padding: const EdgeInsetsDirectional.only(end: 12, start: 4),
                   child: Stack(
                     clipBehavior: Clip.none,
                     children: [
