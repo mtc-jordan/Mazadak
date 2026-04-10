@@ -7,7 +7,12 @@ Usage:
 
 Requires: migrations applied, PostgreSQL running.
 Uses raw SQL inserts matching the 0001_initial_schema migration.
-All monetary values are INTEGER cents (1 JOD = 1000 fils).
+
+Price units:
+  listings  → INTEGER cents  (1 JOD = 100 cents)
+  auctions  → Numeric(10,3)  (JOD float, e.g. 25.000)
+  bids      → Numeric(10,3)  (JOD float)
+  escrows   → Numeric(10,3)  (JOD float)
 """
 
 import asyncio
@@ -125,7 +130,7 @@ async def seed():
         ngo_id = ngo_result.scalar()
         print("  + 1 NGO partner")
 
-        # ── Users ─────────────────────────────────────────────────
+        # ── Users (String columns, no enum casts) ─────────────────
         users = [
             # (id, phone, name_ar, name_en, role, status, kyc, ats, is_pro)
             (ADMIN_ID, "+962790000001", "مدير النظام", "System Admin",
@@ -149,7 +154,7 @@ async def seed():
                      fcm_tokens, preferred_language)
                 VALUES
                     (:id, :phone, :name_ar, :name_en,
-                     :role::user_role, :status::user_status, :kyc::kyc_status,
+                     :role, :status, :kyc,
                      :ats, true, :is_pro, '[]'::jsonb, 'ar')
             """), {
                 "id": uid, "phone": phone, "name_ar": name_ar,
@@ -278,10 +283,10 @@ async def seed():
                      moderation_status, min_increment, location_country)
                 VALUES
                     (:id, :seller_id, :title_ar, :title_en, :description_ar, :description_en,
-                     :category_id, :condition::listing_condition,
+                     :category_id, :condition,
                      :starting_price, :reserve_price, :buy_it_now_price,
                      :current_price, :bid_count,
-                     :status::listing_status, :starts_at, :ends_at,
+                     :status, :starts_at, :ends_at,
                      :is_charity, :ngo_id,
                      'approved', 2500, 'JO')
             """), lst)
@@ -306,148 +311,160 @@ async def seed():
             """), {"listing_id": listing_id, "s3_key": s3_key, "order": order})
         print(f"  + {len(listing_images)} listing images")
 
-        # ── Auctions (match migration schema) ─────────────────────
+        # ── Auctions (Numeric prices in JOD, new column names) ───
         auction_1_id = _uuid()  # Active phone auction
         auction_2_id = _uuid()  # Active car auction
         auction_3_id = _uuid()  # Ended laptop auction
         auction_4_id = _uuid()  # Active charity auction
 
+        # Convert listing cents → auction JOD float
         auctions = [
             {
                 "id": auction_1_id,
                 "listing_id": listing_1_id,
-                "seller_id": SELLER_1_ID,
                 "status": "active",
-                "started_at": NOW - timedelta(hours=2),
-                "ended_at": None,
-                "final_price": None,
+                "starts_at": NOW - timedelta(hours=2),
+                "ends_at": NOW + timedelta(hours=22),
+                "current_price": 3850.000,   # 385000 cents = 3850 JOD
+                "min_increment": 25.000,
+                "bid_count": 3,
+                "extension_count": 0,
                 "winner_id": None,
+                "final_price": None,
             },
             {
                 "id": auction_2_id,
                 "listing_id": listing_2_id,
-                "seller_id": SELLER_2_ID,
                 "status": "active",
-                "started_at": NOW - timedelta(hours=6),
-                "ended_at": None,
-                "final_price": None,
+                "starts_at": NOW - timedelta(hours=6),
+                "ends_at": NOW + timedelta(hours=18),
+                "current_price": 195000.000,  # 19500000 cents = 195000 JOD
+                "min_increment": 250.000,
+                "bid_count": 2,
+                "extension_count": 0,
                 "winner_id": None,
+                "final_price": None,
             },
             {
                 "id": auction_3_id,
                 "listing_id": listing_3_id,
-                "seller_id": SELLER_1_ID,
                 "status": "ended",
-                "started_at": NOW - timedelta(days=3),
-                "ended_at": NOW - timedelta(days=2),
-                "final_price": 700000,  # 700 JOD in cents
+                "starts_at": NOW - timedelta(days=3),
+                "ends_at": NOW - timedelta(days=2),
+                "current_price": 7000.000,   # 700000 cents = 7000 JOD
+                "min_increment": 25.000,
+                "bid_count": 7,
+                "extension_count": 0,
                 "winner_id": BUYER_1_ID,
+                "final_price": 7000.000,
             },
             {
                 "id": auction_4_id,
                 "listing_id": listing_4_id,
-                "seller_id": SELLER_2_ID,
                 "status": "active",
-                "started_at": NOW - timedelta(hours=1),
-                "ended_at": None,
-                "final_price": None,
+                "starts_at": NOW - timedelta(hours=1),
+                "ends_at": NOW + timedelta(hours=23),
+                "current_price": 750.000,    # 75000 cents = 750 JOD
+                "min_increment": 10.000,
+                "bid_count": 2,
+                "extension_count": 0,
                 "winner_id": None,
+                "final_price": None,
             },
         ]
 
         for auc in auctions:
             await db.execute(text("""
                 INSERT INTO auctions
-                    (id, listing_id, seller_id, status, started_at, ended_at,
-                     final_price, winner_id)
+                    (id, listing_id, status, starts_at, ends_at,
+                     current_price, min_increment, bid_count,
+                     extension_count, winner_id, final_price)
                 VALUES
-                    (:id, :listing_id, :seller_id, :status::auction_status,
-                     :started_at, :ended_at, :final_price, :winner_id)
+                    (:id, :listing_id, :status, :starts_at, :ends_at,
+                     :current_price, :min_increment, :bid_count,
+                     :extension_count, :winner_id, :final_price)
             """), auc)
         print(f"  + {len(auctions)} auctions (3 active, 1 ended)")
 
-        # ── Bids (append-only, INTEGER cents, migration columns) ──
+        # ── Bids (Numeric JOD, user_id, currency) ─────────────────
         bids = [
-            # (listing_id, auction_id, bidder_id, amount_cents, is_proxy, created_at)
+            # (auction_id, user_id, amount_jod, is_proxy, created_at)
             # Phone auction
-            (listing_1_id, auction_1_id, BUYER_1_ID, 360000, False,
+            (auction_1_id, BUYER_1_ID, 3600.000, False,
              NOW - timedelta(hours=1, minutes=30)),
-            (listing_1_id, auction_1_id, BUYER_2_ID, 370000, False,
+            (auction_1_id, BUYER_2_ID, 3700.000, False,
              NOW - timedelta(hours=1)),
-            (listing_1_id, auction_1_id, BUYER_1_ID, 385000, False,
+            (auction_1_id, BUYER_1_ID, 3850.000, False,
              NOW - timedelta(minutes=30)),
             # Car auction
-            (listing_2_id, auction_2_id, BUYER_1_ID, 18500000, False,
+            (auction_2_id, BUYER_1_ID, 185000.000, False,
              NOW - timedelta(hours=4)),
-            (listing_2_id, auction_2_id, BUYER_2_ID, 19500000, False,
+            (auction_2_id, BUYER_2_ID, 195000.000, False,
              NOW - timedelta(hours=2)),
             # Laptop auction (ended)
-            (listing_3_id, auction_3_id, BUYER_1_ID, 570000, False,
+            (auction_3_id, BUYER_1_ID, 5700.000, False,
              NOW - timedelta(days=2, hours=20)),
-            (listing_3_id, auction_3_id, BUYER_2_ID, 600000, False,
+            (auction_3_id, BUYER_2_ID, 6000.000, False,
              NOW - timedelta(days=2, hours=16)),
-            (listing_3_id, auction_3_id, BUYER_1_ID, 630000, False,
+            (auction_3_id, BUYER_1_ID, 6300.000, False,
              NOW - timedelta(days=2, hours=12)),
-            (listing_3_id, auction_3_id, BUYER_2_ID, 650000, False,
+            (auction_3_id, BUYER_2_ID, 6500.000, False,
              NOW - timedelta(days=2, hours=8)),
-            (listing_3_id, auction_3_id, BUYER_1_ID, 670000, False,
+            (auction_3_id, BUYER_1_ID, 6700.000, False,
              NOW - timedelta(days=2, hours=4)),
-            (listing_3_id, auction_3_id, BUYER_2_ID, 690000, False,
+            (auction_3_id, BUYER_2_ID, 6900.000, False,
              NOW - timedelta(days=1, hours=12)),
-            (listing_3_id, auction_3_id, BUYER_1_ID, 700000, False,
+            (auction_3_id, BUYER_1_ID, 7000.000, False,
              NOW - timedelta(days=1, hours=6)),
             # Charity auction
-            (listing_4_id, auction_4_id, BUYER_2_ID, 60000, False,
+            (auction_4_id, BUYER_2_ID, 600.000, False,
              NOW - timedelta(minutes=45)),
-            (listing_4_id, auction_4_id, BUYER_1_ID, 75000, False,
+            (auction_4_id, BUYER_1_ID, 750.000, False,
              NOW - timedelta(minutes=20)),
         ]
 
-        for listing_id, auction_id, bidder_id, amount, is_proxy, created_at in bids:
+        for auction_id, user_id, amount, is_proxy, created_at in bids:
             await db.execute(text("""
                 INSERT INTO bids
-                    (id, listing_id, auction_id, bidder_id, amount,
-                     status, is_proxy, created_at)
+                    (id, auction_id, user_id, amount, currency,
+                     is_proxy, created_at)
                 VALUES
-                    (:id, :listing_id, :auction_id, :bidder_id, :amount,
-                     'accepted'::bid_status, :is_proxy, :created_at)
+                    (:id, :auction_id, :user_id, :amount, 'JOD',
+                     :is_proxy, :created_at)
             """), {
-                "id": _uuid(), "listing_id": listing_id,
-                "auction_id": auction_id, "bidder_id": bidder_id,
-                "amount": amount, "is_proxy": is_proxy,
-                "created_at": created_at,
+                "id": _uuid(), "auction_id": auction_id,
+                "user_id": user_id, "amount": amount,
+                "is_proxy": is_proxy, "created_at": created_at,
             })
         print(f"  + {len(bids)} bids across 4 auctions")
 
-        # ── Escrow (ended laptop auction, INTEGER cents) ──────────
+        # ── Escrow (ended laptop auction, Numeric JOD) ────────────
         escrow_id = _uuid()
-        platform_fee = 35000    # 5% of 700 JOD = 35 JOD
-        seller_payout = 665000  # 700 - 35 = 665 JOD
+        escrow_amount = 7000.000     # 7000 JOD
+        seller_amount = 6650.000     # 7000 - 5% = 6650 JOD
 
         await db.execute(text("""
             INSERT INTO escrows
-                (id, auction_id, listing_id, buyer_id, seller_id,
-                 amount, platform_fee, seller_payout,
+                (id, auction_id, winner_id, seller_id,
+                 amount, currency, seller_amount,
                  state, payment_deadline, shipping_deadline)
             VALUES
-                (:id, :auction_id, :listing_id, :buyer_id, :seller_id,
-                 :amount, :platform_fee, :seller_payout,
-                 'shipping_requested'::escrow_status,
+                (:id, :auction_id, :winner_id, :seller_id,
+                 :amount, 'JOD', :seller_amount,
+                 'shipping_requested',
                  :pay_dl, :ship_dl)
         """), {
             "id": escrow_id,
             "auction_id": auction_3_id,
-            "listing_id": listing_3_id,
-            "buyer_id": BUYER_1_ID,
+            "winner_id": BUYER_1_ID,
             "seller_id": SELLER_1_ID,
-            "amount": 700000,
-            "platform_fee": platform_fee,
-            "seller_payout": seller_payout,
+            "amount": escrow_amount,
+            "seller_amount": seller_amount,
             "pay_dl": NOW - timedelta(days=1, hours=12),
             "ship_dl": NOW + timedelta(days=2),
         })
 
-        # Escrow events — append-only audit trail
+        # Escrow events — append-only audit trail (Text columns, meta not metadata)
         events = [
             ("payment_pending", "funds_held", BUYER_1_ID, "buyer",
              "payment_confirmed", NOW - timedelta(days=1)),
@@ -458,10 +475,10 @@ async def seed():
             await db.execute(text("""
                 INSERT INTO escrow_events
                     (id, escrow_id, from_state, to_state,
-                     actor_id, actor_type, trigger, metadata, created_at)
+                     actor_id, actor_type, trigger, meta, created_at)
                 VALUES
                     (:id, :escrow_id,
-                     :from_s::escrow_status, :to_s::escrow_status,
+                     :from_s, :to_s,
                      :actor_id, :actor_type, :trigger,
                      '{}'::jsonb, :created_at)
             """), {
@@ -481,7 +498,7 @@ async def seed():
             """), {"id": _uuid(), "user_id": uid})
         print("  + 6 notification preferences (defaults)")
 
-        # ── Sample notifications ──────────────────────────────────
+        # ── Sample notifications (String event_type, no enum) ─────
         notifications = [
             (BUYER_1_ID, "new_bid", listing_1_id, "listing",
              "تم تأكيد مزايدتك", "Bid Confirmed",
@@ -502,7 +519,7 @@ async def seed():
                     (id, user_id, event_type, entity_id, entity_type,
                      title_ar, title_en, body_ar, body_en)
                 VALUES
-                    (:id, :user_id, :event::notification_event,
+                    (:id, :user_id, :event,
                      :entity_id, :entity_type,
                      :t_ar, :t_en, :b_ar, :b_en)
             """), {
@@ -512,12 +529,12 @@ async def seed():
             })
         print(f"  + {len(notifications)} notifications")
 
-        # ── Admin audit log ───────────────────────────────────────
+        # ── Admin audit log (ip_address is Text, not INET) ────────
         await db.execute(text("""
             INSERT INTO admin_audit_log
                 (id, admin_id, action, entity_type, entity_id, ip_address)
             VALUES
-                (:id, :admin_id, 'seed_database', 'system', null, '127.0.0.1'::inet)
+                (:id, :admin_id, 'seed_database', 'system', null, '127.0.0.1')
         """), {"id": _uuid(), "admin_id": ADMIN_ID})
         print("  + 1 admin audit log entry")
 
