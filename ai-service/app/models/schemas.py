@@ -17,11 +17,11 @@ class SnapToListRequest(BaseModel):
 
 
 class PriceEstimateSnap(BaseModel):
-    price_low: int
-    price_high: int
-    price_mid: int
+    price_low: int | None = None
+    price_high: int | None = None
+    price_mid: int | None = None
     suggested_start: int | None = None
-    confidence: str  # "high" | "medium" | "low"
+    confidence: str = Field(default="none", pattern=r"^(high|medium|low|none)$")
 
 
 class SnapResult(BaseModel):
@@ -85,7 +85,7 @@ class PriceOracleResponse(BaseModel):
 class FraudScoreRequest(BaseModel):
     user_id: str
     auction_id: str
-    bid_amount: int
+    bid_amount: float
 
 
 class FraudScoreResponse(BaseModel):

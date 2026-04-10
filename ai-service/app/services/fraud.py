@@ -19,7 +19,7 @@ VERY_HIGH_BID_THRESHOLD = 5_000_000  # 50,000 JOD — very high bid
 async def score_fraud(
     user_id: str,
     auction_id: str,
-    bid_amount: int,
+    bid_amount: float,
 ) -> FraudScoreResponse:
     """Compute a fraud risk score based on rule-based heuristics.
 

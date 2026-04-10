@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -435,8 +437,8 @@ class _PhotoTile extends StatelessWidget {
       children: [
         ClipRRect(
           borderRadius: AppSpacing.radiusMd,
-          child: Image.network(
-            photo.path,
+          child: Image.file(
+            File(photo.path),
             fit: BoxFit.cover,
             width: double.infinity,
             height: double.infinity,
@@ -745,6 +747,14 @@ class _PricingStep extends ConsumerWidget {
             keyboardType: TextInputType.number,
             decoration:
                 _inputDecor('لن يُباع بأقل من هذا السعر'),
+            validator: (v) {
+              if (v == null || v.isEmpty) return null;
+              final n = int.tryParse(v);
+              if (n == null) return null;
+              final startJod = (s.startingPrice ?? 0) ~/ 100;
+              if (n < startJod) return 'يجب أن يكون أعلى من سعر البداية';
+              return null;
+            },
             onChanged: (v) {
               final n = int.tryParse(v);
               notifier.updateReservePrice(n != null ? n * 100 : null);
@@ -761,6 +771,14 @@ class _PricingStep extends ConsumerWidget {
                 : '',
             keyboardType: TextInputType.number,
             decoration: _inputDecor('يُباع فوراً بهذا السعر'),
+            validator: (v) {
+              if (v == null || v.isEmpty) return null;
+              final n = int.tryParse(v);
+              if (n == null) return null;
+              final startJod = (s.startingPrice ?? 0) ~/ 100;
+              if (n <= startJod) return 'يجب أن يكون أعلى من سعر البداية';
+              return null;
+            },
             onChanged: (v) {
               final n = int.tryParse(v);
               notifier.updateBuyNowPrice(n != null ? n * 100 : null);
@@ -962,8 +980,8 @@ class _ReviewStep extends ConsumerWidget {
               separatorBuilder: (_, __) => const SizedBox(width: 8),
               itemBuilder: (_, i) => ClipRRect(
                 borderRadius: AppSpacing.radiusSm,
-                child: Image.network(
-                  s.photos[i].path,
+                child: Image.file(
+                  File(s.photos[i].path),
                   width: 80,
                   height: 80,
                   fit: BoxFit.cover,

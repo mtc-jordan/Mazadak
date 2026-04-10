@@ -295,10 +295,10 @@ class CreateListingNotifier extends StateNotifier<CreateListingState> {
 
   void addPhotos(List<XFile> newPhotos) {
     final combined = [...state.photos, ...newPhotos];
-    if (combined.length > 20) {
+    if (combined.length > 10) {
       state = state.copyWith(
-        photos: combined.sublist(0, 20),
-        error: 'الحد الأقصى ٢٠ صورة', // Max 20 images
+        photos: combined.sublist(0, 10),
+        error: 'الحد الأقصى ١٠ صور', // Max 10 images (backend limit)
         clearError: false,
       );
       return;
@@ -525,7 +525,7 @@ class CreateListingNotifier extends StateNotifier<CreateListingState> {
 
     try {
       // Update draft with final values before publishing
-      await api.put('/listings/$listingId', data: {
+      await api.patch('/listings/$listingId', data: {
         'title_ar': state.titleAr,
         'title_en': state.titleEn,
         if (state.descriptionAr != null) 'description_ar': state.descriptionAr,

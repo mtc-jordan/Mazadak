@@ -19,7 +19,10 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// 401 response interceptor — attempt token refresh
+// 401 response interceptor — attempt token refresh (with shared promise to
+// prevent concurrent refresh races)
+let refreshPromise: Promise<string> | null = null;
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -35,17 +38,27 @@ api.interceptors.response.use(
       const refreshToken = localStorage.getItem("admin_refresh_token");
       if (refreshToken) {
         try {
-          const res = await axios.post(`${BASE}/api/v1/auth/refresh`, {
-            refresh_token: refreshToken,
-          });
-
-          const { access_token, refresh_token: newRefresh } = res.data;
-          localStorage.setItem("admin_token", access_token);
-          if (newRefresh) {
-            localStorage.setItem("admin_refresh_token", newRefresh);
+          // Reuse in-flight refresh if one is already running
+          if (!refreshPromise) {
+            refreshPromise = axios
+              .post(`${BASE}/api/v1/auth/refresh`, {
+                refresh_token: refreshToken,
+              })
+              .then((res) => {
+                const { access_token, refresh_token: newRefresh } = res.data;
+                localStorage.setItem("admin_token", access_token);
+                if (newRefresh) {
+                  localStorage.setItem("admin_refresh_token", newRefresh);
+                }
+                return access_token as string;
+              })
+              .finally(() => {
+                refreshPromise = null;
+              });
           }
 
-          originalRequest.headers.Authorization = `Bearer ${access_token}`;
+          const accessToken = await refreshPromise;
+          originalRequest.headers.Authorization = `Bearer ${accessToken}`;
           return api(originalRequest);
         } catch {
           // Refresh failed — clear and redirect

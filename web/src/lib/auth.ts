@@ -110,7 +110,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
-      await api.post("/auth/logout");
+      const refreshToken = localStorage.getItem("admin_refresh_token");
+      await api.post("/auth/logout", {
+        refresh_token: refreshToken || "",
+        revoke_all: false,
+      });
     } catch {
       // Ignore — we clear locally regardless
     }
