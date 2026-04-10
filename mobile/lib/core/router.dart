@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../main.dart' show navigatorKey;
+
 import '../features/auction/auction_room_screen.dart';
 import '../features/escrow/escrow_order_screen.dart';
 import '../features/listing/create_listing_screen.dart';
@@ -69,6 +71,7 @@ final routerProvider = Provider<GoRouter>((ref) {
   final authState = ref.watch(authProvider);
 
   return GoRouter(
+    navigatorKey: navigatorKey,
     initialLocation: AppRoutes.splash,
     debugLogDiagnostics: false,
 

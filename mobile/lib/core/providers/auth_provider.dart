@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../network/api_client.dart';
@@ -67,6 +71,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   final ApiClient api;
   final TokenStorage tokenStorage;
+  StreamSubscription<String>? _tokenRefreshSub;
 
   Future<void> _checkExistingSession() async {
     final hasTokens = await tokenStorage.hasTokens;
@@ -82,6 +87,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
           role: data['role'] as String?,
           kycStatus: data['kyc_status'] as String?,
         );
+        _registerFcmToken();
       } catch (_) {
         await tokenStorage.clearTokens();
         state = const AuthState(status: AuthStatus.unauthenticated);
@@ -132,6 +138,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
         role: 'buyer',
         kycStatus: 'pending',
       );
+      _registerFcmToken();
       return true;
     }
     if (phone == _testPhone && code != _testOtp) {
@@ -160,14 +167,64 @@ class AuthNotifier extends StateNotifier<AuthState> {
         role: user['role'] as String?,
         kycStatus: user['kyc_status'] as String?,
       );
+      _registerFcmToken();
       return true;
     } catch (e) {
       rethrow;
     }
   }
 
-  /// Log out — clear tokens and reset state.
+  /// Register the device's FCM token with the backend for push notifications.
+  ///
+  /// Called after login/session restore. Also listens for token refresh events
+  /// so the backend always has the current token.
+  Future<void> _registerFcmToken() async {
+    try {
+      final fcm = FirebaseMessaging.instance;
+      final token = await fcm.getToken();
+      if (token != null) {
+        final platform = Platform.isAndroid ? 'android' : 'ios';
+        await api.post('/auth/device-token', data: {
+          'token': token,
+          'platform': platform,
+        });
+      }
+
+      // Re-register whenever Firebase rotates the token.
+      _tokenRefreshSub?.cancel();
+      _tokenRefreshSub = fcm.onTokenRefresh.listen((newToken) async {
+        try {
+          final p = Platform.isAndroid ? 'android' : 'ios';
+          await api.post('/auth/device-token', data: {
+            'token': newToken,
+            'platform': p,
+          });
+        } catch (_) {
+          // Best-effort — next app launch will re-register.
+        }
+      });
+    } catch (_) {
+      // FCM unavailable (e.g. emulator without Google Play). Non-fatal.
+    }
+  }
+
+  /// Unregister the current FCM token from the backend.
+  Future<void> _unregisterFcmToken() async {
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token != null) {
+        await api.delete('/auth/device-token', data: {'token': token});
+      }
+    } catch (_) {
+      // Best-effort — token will expire/be evicted server-side.
+    }
+    _tokenRefreshSub?.cancel();
+    _tokenRefreshSub = null;
+  }
+
+  /// Log out — unregister FCM token, clear tokens, and reset state.
   Future<void> logout() async {
+    await _unregisterFcmToken();
     await tokenStorage.clearTokens();
     state = const AuthState(status: AuthStatus.unauthenticated);
   }

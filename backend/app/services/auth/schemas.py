@@ -98,6 +98,17 @@ class LogoutResponse(BaseModel):
     success: bool = True
 
 
+# ── Device token (FCM push notifications) ──────────────────────
+
+class RegisterDeviceTokenRequest(BaseModel):
+    token: str = Field(..., min_length=10, max_length=500)
+    platform: str = Field(default="android", pattern=r"^(android|ios|web)$")
+
+
+class RegisterDeviceTokenResponse(BaseModel):
+    registered: bool = True
+
+
 # ── User profile ────────────────────────────────────────────────
 
 class UserResponse(BaseModel):

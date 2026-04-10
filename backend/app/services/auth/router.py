@@ -314,3 +314,58 @@ async def kyc_submit(
     )
 
     return schemas.KYCSubmitResponse(**result)
+
+
+# ── POST /auth/device-token — FCM push token registration ─────
+
+MAX_FCM_TOKENS = 5  # max tokens per user (across devices)
+
+
+@router.post(
+    "/device-token",
+    response_model=schemas.RegisterDeviceTokenResponse,
+)
+async def register_device_token(
+    body: schemas.RegisterDeviceTokenRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Register an FCM push notification token for the current device.
+
+    Upserts into user.fcm_tokens (JSONB array). Deduplicates tokens and
+    enforces a max of 5 tokens per user (FIFO eviction).
+    """
+    tokens: list[str] = list(user.fcm_tokens or [])
+
+    # Deduplicate: if token already registered, move to end (most recent)
+    if body.token in tokens:
+        tokens.remove(body.token)
+    tokens.append(body.token)
+
+    # FIFO eviction if over limit
+    if len(tokens) > MAX_FCM_TOKENS:
+        tokens = tokens[-MAX_FCM_TOKENS:]
+
+    user.fcm_tokens = tokens
+    await db.commit()
+
+    return schemas.RegisterDeviceTokenResponse()
+
+
+@router.delete(
+    "/device-token",
+    response_model=schemas.RegisterDeviceTokenResponse,
+)
+async def remove_device_token(
+    body: schemas.RegisterDeviceTokenRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove an FCM token on logout (prevents stale push delivery)."""
+    tokens: list[str] = list(user.fcm_tokens or [])
+    if body.token in tokens:
+        tokens.remove(body.token)
+        user.fcm_tokens = tokens
+        await db.commit()
+
+    return schemas.RegisterDeviceTokenResponse()

@@ -9,9 +9,14 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'core/l10n/locale_provider.dart';
 import 'core/router.dart';
 import 'core/theme/theme.dart';
+import 'package:go_router/go_router.dart';
 
 /// Global navigator key for routing from FCM handlers.
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+/// Global scaffold messenger key for showing snackbars from FCM handlers.
+final GlobalKey<ScaffoldMessengerState> scaffoldMessengerKey =
+    GlobalKey<ScaffoldMessengerState>();
 
 /// Handle FCM messages when app is in background/terminated.
 @pragma('vm:entry-point')
@@ -34,11 +39,11 @@ void _handleNotificationNavigation(RemoteMessage message) {
   }
 
   if (type.startsWith('bid') || type.contains('auction')) {
-    Navigator.of(context).pushNamed('/auction/$id');
+    GoRouter.of(context).push('/auction/$id');
   } else if (type.startsWith('escrow')) {
-    Navigator.of(context).pushNamed('/escrow/$id');
+    GoRouter.of(context).push('/escrow/$id');
   } else if (type.contains('listing')) {
-    Navigator.of(context).pushNamed('/listing/$id');
+    GoRouter.of(context).push('/listing/$id');
   }
 }
 
@@ -49,6 +54,23 @@ Future<void> main() async {
   try {
     await Firebase.initializeApp();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+    // Handle foreground messages — show in-app banner
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      final notification = message.notification;
+      if (notification == null) return;
+      final messenger = scaffoldMessengerKey.currentState;
+      if (messenger == null) return;
+      messenger.showSnackBar(SnackBar(
+        content: Text(notification.body ?? notification.title ?? ''),
+        action: SnackBarAction(
+          label: 'عرض',
+          onPressed: () => _handleNotificationNavigation(message),
+        ),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+      ));
+    });
 
     // Handle notification taps when app is in background
     FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationNavigation);
@@ -86,6 +108,7 @@ class MzadakApp extends ConsumerWidget {
     final locale = ref.watch(localeProvider);
 
     return MaterialApp.router(
+      scaffoldMessengerKey: scaffoldMessengerKey,
       title: 'MZADAK',
 
       // ── Theme ─────────────────────────────────────────────────

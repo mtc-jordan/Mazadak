@@ -54,6 +54,22 @@ async def _lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("meilisearch_init_skipped", error=str(exc))
 
+    # Initialize Firebase Admin SDK (required for FCM push notifications)
+    try:
+        import firebase_admin  # type: ignore[import-untyped]
+        from firebase_admin import credentials
+
+        if settings.FIREBASE_CREDENTIALS_PATH:
+            cred = credentials.Certificate(settings.FIREBASE_CREDENTIALS_PATH)
+            firebase_admin.initialize_app(cred)
+            logger.info("firebase_admin_initialized")
+        else:
+            # Try default credentials (e.g. GOOGLE_APPLICATION_CREDENTIALS env var)
+            firebase_admin.initialize_app()
+            logger.info("firebase_admin_initialized_default")
+    except Exception as exc:
+        logger.warning("firebase_init_skipped", error=str(exc))
+
     # Start Redis keyspace expiry listener for auction end detection
     try:
         from app.core.redis import start_keyspace_listener
