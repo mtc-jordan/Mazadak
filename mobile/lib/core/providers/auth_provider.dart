@@ -130,7 +130,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
         accessToken: 'test_access_token',
         refreshToken: 'test_refresh_token',
       );
-      state = AuthState(
+      state = const AuthState(
         status: AuthStatus.authenticated,
         userId: 'test-user-001',
         phone: _testPhone,
