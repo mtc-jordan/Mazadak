@@ -216,6 +216,15 @@ class ListingResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ── My listings (grouped) response ──────────────────────────
+
+class MyListingsResponse(BaseModel):
+    active: list[ListingResponse] = []
+    ended: list[ListingResponse] = []
+    draft: list[ListingResponse] = []
+    pending: list[ListingResponse] = []
+
+
 # ── Paginated list response ──────────────────────────────────
 
 class ListingListResponse(BaseModel):

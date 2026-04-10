@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select, or_
+
 from app.core.database import get_db
 from app.core.redis import get_redis
 from app.core.types import UUIDPath
@@ -11,9 +13,69 @@ from app.services.auth.dependencies import get_current_user
 from app.services.auth.models import User
 from app.services.auction import schemas, service
 from app.services.auction.dependencies import check_bid_rate_limit, get_auction_or_404
-from app.services.auction.models import Auction
+from app.services.auction.models import Auction, AuctionStatus
+from app.services.listing.models import Listing
 
 router = APIRouter(prefix="/auctions", tags=["auctions"])
+
+
+# ── GET /mine — My auctions (seller + won) ────────────────────
+
+@router.get("/mine", response_model=schemas.MyAuctionsResponse)
+async def list_my_auctions(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return auctions where the caller is seller or winner, grouped."""
+    # Fetch auctions where user is seller (via listing) or winner
+    result = await db.execute(
+        select(Auction, Listing)
+        .join(Listing, Auction.listing_id == Listing.id)
+        .where(
+            or_(
+                Listing.seller_id == user.id,
+                Auction.winner_id == user.id,
+            )
+        )
+    )
+    rows = result.all()
+
+    active: list[schemas.MyAuctionItem] = []
+    ended: list[schemas.MyAuctionItem] = []
+    won: list[schemas.MyAuctionItem] = []
+
+    for auction, listing in rows:
+        # Pick first image URL if available
+        image_url = ""
+        if listing.images:
+            image_url = listing.images[0].s3_key
+
+        item = schemas.MyAuctionItem(
+            id=auction.id,
+            listing_id=auction.listing_id,
+            title_ar=listing.title_ar,
+            title_en=listing.title_en,
+            image_url=image_url,
+            starting_price=float(listing.starting_price),
+            current_price=float(auction.current_price),
+            currency="JOD",
+            bid_count=auction.bid_count,
+            status=auction.status if isinstance(auction.status, str) else auction.status.value,
+            ends_at=auction.ends_at,
+            winner_name=None,
+            is_live=auction.status == AuctionStatus.ACTIVE,
+        )
+
+        # Categorise
+        if auction.winner_id == user.id:
+            won.append(item)
+        if listing.seller_id == user.id:
+            if auction.status == AuctionStatus.ACTIVE:
+                active.append(item)
+            elif auction.status == AuctionStatus.ENDED:
+                ended.append(item)
+
+    return schemas.MyAuctionsResponse(active=active, ended=ended, won=won)
 
 
 @router.get("/{auction_id}", response_model=schemas.AuctionOut)

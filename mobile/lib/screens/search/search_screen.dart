@@ -2,75 +2,18 @@ import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/l10n/arabic_numerals.dart';
 import '../../core/providers/core_providers.dart';
+import '../../core/providers/create_listing_provider.dart';
 import '../../core/providers/listings_provider.dart';
-import '../../core/router.dart';
+import '../../core/providers/search_provider.dart';
 import '../../core/theme/colors.dart';
-import '../../core/theme/spacing.dart';
-
-// ═══════════════════════════════════════════════════════════════════
-// Search state
-// ═══════════════════════════════════════════════════════════════════
-
-class _SearchFilters {
-  const _SearchFilters({
-    this.category,
-    this.condition,
-    this.priceMin = 0,
-    this.priceMax = 10000,
-    this.status,
-    this.location,
-    this.certifiedOnly = false,
-  });
-
-  final String? category;
-  final String? condition;
-  final double priceMin;
-  final double priceMax;
-  final String? status;
-  final String? location;
-  final bool certifiedOnly;
-
-  bool get isActive =>
-      category != null ||
-      condition != null ||
-      priceMin > 0 ||
-      priceMax < 10000 ||
-      status != null ||
-      location != null ||
-      certifiedOnly;
-
-  _SearchFilters copyWith({
-    String? category,
-    String? condition,
-    double? priceMin,
-    double? priceMax,
-    String? status,
-    String? location,
-    bool? certifiedOnly,
-    bool clearCategory = false,
-    bool clearCondition = false,
-    bool clearStatus = false,
-    bool clearLocation = false,
-  }) {
-    return _SearchFilters(
-      category: clearCategory ? null : (category ?? this.category),
-      condition: clearCondition ? null : (condition ?? this.condition),
-      priceMin: priceMin ?? this.priceMin,
-      priceMax: priceMax ?? this.priceMax,
-      status: clearStatus ? null : (status ?? this.status),
-      location: clearLocation ? null : (location ?? this.location),
-      certifiedOnly: certifiedOnly ?? this.certifiedOnly,
-    );
-  }
-
-  static const empty = _SearchFilters();
-}
+import 'search_filters_sheet.dart';
 
 // ═══════════════════════════════════════════════════════════════════
 // Search Screen
@@ -91,7 +34,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   List<ListingSummary> _results = [];
   bool _isSearching = false;
   bool _hasSearched = false;
-  _SearchFilters _filters = _SearchFilters.empty;
+  SearchFilters _filters = SearchFilters.empty;
   String _sortBy = 'ends_asc';
 
   // Recent searches — persisted via SharedPreferences
@@ -168,17 +111,18 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
     try {
       final api = ref.read(apiClientProvider);
-      final resp = await api.get('/search/listings', queryParameters: {
+      final body = <String, dynamic>{
         'q': query,
-        'sort': _sortBy,
-        if (_filters.category != null) 'category': _filters.category,
+        'sort': _filters.sort,
+        'limit': 20,
+        'offset': 0,
+        if (_filters.categoryId != null) 'category_id': _filters.categoryId,
         if (_filters.condition != null) 'condition': _filters.condition,
-        if (_filters.priceMin > 0) 'price_min': _filters.priceMin,
-        if (_filters.priceMax < 10000) 'price_max': _filters.priceMax,
-        if (_filters.status != null) 'status': _filters.status,
-        if (_filters.location != null) 'location': _filters.location,
-        if (_filters.certifiedOnly) 'certified': true,
-      });
+        if (_filters.priceMin != null) 'price_min': _filters.priceMin,
+        if (_filters.priceMax != null) 'price_max': _filters.priceMax,
+        if (_filters.isCertified == true) 'is_certified': true,
+      };
+      final resp = await api.post('/search/listings', data: body);
 
       final data = resp.data as Map<String, dynamic>;
       final items = (data['items'] as List)
@@ -216,7 +160,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   void _onSortChanged(String key) {
     if (_sortBy == key) return;
-    setState(() => _sortBy = key);
+    setState(() {
+      _sortBy = key;
+      _filters = _filters.copyWith(sort: key);
+    });
     if (_hasSearched) _performSearch();
   }
 
@@ -239,16 +186,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   void _openFilterSheet() async {
-    final result = await showModalBottomSheet<_SearchFilters>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _FilterSheet(
-        filters: _filters,
-      ),
+    HapticFeedback.lightImpact();
+    final result = await showSearchFiltersSheet(
+      context,
+      currentFilters: _filters,
     );
     if (result != null && mounted) {
-      setState(() => _filters = result);
+      setState(() {
+        _filters = result;
+        _sortBy = result.sort;
+      });
       if (_hasSearched) _performSearch();
     }
   }
@@ -307,6 +254,22 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                           color: AppColors.mist,
                         ),
                       ),
+                    ),
+                  ],
+
+                  // Active filter chips (removable)
+                  if (_filters.hasActiveFilters) ...[
+                    const SizedBox(height: 8),
+                    _ActiveFilterChips(
+                      filters: _filters,
+                      onRemove: (updated) {
+                        HapticFeedback.lightImpact();
+                        setState(() {
+                          _filters = updated;
+                          _sortBy = updated.sort;
+                        });
+                        if (_hasSearched) _performSearch();
+                      },
                     ),
                   ],
 
@@ -401,16 +364,26 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     children: [
                       const Icon(Icons.tune_rounded,
                           color: AppColors.navy, size: 18),
-                      if (_filters.isActive)
+                      if (_filters.hasActiveFilters)
                         Positioned(
-                          top: -2,
-                          right: -2,
+                          top: -4,
+                          right: -6,
                           child: Container(
-                            width: 7,
-                            height: 7,
+                            width: 16,
+                            height: 16,
                             decoration: const BoxDecoration(
                               color: AppColors.gold,
                               shape: BoxShape.circle,
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              '${_filters.activeCount}',
+                              style: const TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                                height: 1,
+                              ),
                             ),
                           ),
                         ),
@@ -918,351 +891,124 @@ final _mockSearchResults = [
 ];
 
 // ═══════════════════════════════════════════════════════════════════
-// Filter Bottom Sheet
+// Active Filter Chips (removable, shown below search bar)
 // ═══════════════════════════════════════════════════════════════════
 
-class _FilterSheet extends StatefulWidget {
-  const _FilterSheet({
+class _ActiveFilterChips extends StatelessWidget {
+  const _ActiveFilterChips({
     required this.filters,
+    required this.onRemove,
   });
 
-  final _SearchFilters filters;
-
-  @override
-  State<_FilterSheet> createState() => _FilterSheetState();
-}
-
-class _FilterSheetState extends State<_FilterSheet> {
-  late _SearchFilters _draft;
-
-  static const _categories = [
-    'All',
-    'Electronics',
-    'Vehicles',
-    'Jewelry',
-    'Art',
-    'Fashion',
-    'Antiques',
-    'Charity',
-  ];
-  static const _conditions = ['Brand New', 'Like New', 'Very Good', 'Good'];
-  static const _statuses = [
-    'Live Now',
-    'Ending Soon',
-    'Buy It Now',
-    'Charity'
-  ];
-  static const _locations = ['Jordan', 'Saudi Arabia', 'UAE', 'All GCC'];
-
-  @override
-  void initState() {
-    super.initState();
-    _draft = widget.filters;
-  }
+  final SearchFilters filters;
+  final ValueChanged<SearchFilters> onRemove;
 
   @override
   Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.6,
-      maxChildSize: 0.92,
-      minChildSize: 0.4,
-      builder: (_, scrollController) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          child: ListView(
-            controller: scrollController,
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            children: [
-              const SizedBox(height: 12),
-              // Handle bar
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.cream,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
+    final chips = <_ActiveChip>[];
 
-              const Text(
-                'Filters',
-                style: TextStyle(
-                  fontFamily: 'Sora',
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.navy,
-                ),
-              ),
-              const SizedBox(height: 20),
+    if (filters.categoryId != null) {
+      final cat = kCategories.where((c) => c.id == filters.categoryId).firstOrNull;
+      if (cat != null) {
+        chips.add(_ActiveChip(
+          label: '${cat.icon} ${cat.nameAr}',
+          onRemove: () => onRemove(filters.copyWith(clearCategory: true)),
+        ));
+      }
+    }
 
-              // Category
-              _FilterSection(
-                title: 'Category',
-                child: _ChipGrid(
-                  items: _categories,
-                  selected: _draft.category,
-                  onSelected: (v) => setState(() {
-                    _draft = v == 'All' || v == _draft.category
-                        ? _draft.copyWith(clearCategory: true)
-                        : _draft.copyWith(category: v);
-                  }),
-                ),
-              ),
+    if (filters.condition != null) {
+      final cond = kConditions.where((c) => c.value == filters.condition).firstOrNull;
+      if (cond != null) {
+        chips.add(_ActiveChip(
+          label: cond.labelAr,
+          onRemove: () => onRemove(filters.copyWith(clearCondition: true)),
+        ));
+      }
+    }
 
-              // Condition
-              _FilterSection(
-                title: 'Condition',
-                child: _ChipGrid(
-                  items: _conditions,
-                  selected: _draft.condition,
-                  onSelected: (v) => setState(() {
-                    _draft = v == _draft.condition
-                        ? _draft.copyWith(clearCondition: true)
-                        : _draft.copyWith(condition: v);
-                  }),
-                ),
-              ),
+    if (filters.priceMin != null) {
+      chips.add(_ActiveChip(
+        label: 'من ${(filters.priceMin! / 100).toStringAsFixed(0)} د.أ',
+        onRemove: () => onRemove(filters.copyWith(clearPriceMin: true)),
+      ));
+    }
 
-              // Price range
-              _FilterSection(
-                title: 'Price range',
-                child: Column(
-                  children: [
-                    RangeSlider(
-                      values:
-                          RangeValues(_draft.priceMin, _draft.priceMax),
-                      min: 0,
-                      max: 10000,
-                      divisions: 100,
-                      activeColor: AppColors.navy,
-                      inactiveColor: AppColors.sand,
-                      onChanged: (v) => setState(() {
-                        _draft = _draft.copyWith(
-                          priceMin: v.start,
-                          priceMax: v.end,
-                        );
-                      }),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            '${_draft.priceMin.toInt()} JOD',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.navy,
-                            ),
-                          ),
-                          Text(
-                            '${_draft.priceMax.toInt()} JOD',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.navy,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+    if (filters.priceMax != null) {
+      chips.add(_ActiveChip(
+        label: 'حتى ${(filters.priceMax! / 100).toStringAsFixed(0)} د.أ',
+        onRemove: () => onRemove(filters.copyWith(clearPriceMax: true)),
+      ));
+    }
 
-              // Status
-              _FilterSection(
-                title: 'Status',
-                child: _ChipGrid(
-                  items: _statuses,
-                  selected: _draft.status,
-                  onSelected: (v) => setState(() {
-                    _draft = v == _draft.status
-                        ? _draft.copyWith(clearStatus: true)
-                        : _draft.copyWith(status: v);
-                  }),
-                ),
-              ),
+    if (filters.isCertified == true) {
+      chips.add(_ActiveChip(
+        label: 'موثّق',
+        onRemove: () => onRemove(filters.copyWith(clearCertified: true)),
+      ));
+    }
 
-              // Location
-              _FilterSection(
-                title: 'Location',
-                child: _ChipGrid(
-                  items: _locations,
-                  selected: _draft.location,
-                  onSelected: (v) => setState(() {
-                    _draft = v == _draft.location
-                        ? _draft.copyWith(clearLocation: true)
-                        : _draft.copyWith(location: v);
-                  }),
-                ),
-              ),
+    if (filters.sort != 'ends_asc') {
+      final sortLabels = {
+        'price_asc': 'الأقل سعراً',
+        'bid_count_desc': 'الأكثر مزايدة',
+      };
+      chips.add(_ActiveChip(
+        label: sortLabels[filters.sort] ?? filters.sort,
+        onRemove: () => onRemove(filters.copyWith(sort: 'ends_asc')),
+      ));
+    }
 
-              // Certified only
-              Padding(
-                padding: const EdgeInsets.only(top: 8, bottom: 16),
-                child: Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'Certified only',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.navy,
-                        ),
-                      ),
-                    ),
-                    Switch.adaptive(
-                      value: _draft.certifiedOnly,
-                      activeColor: AppColors.emerald,
-                      onChanged: (v) => setState(() {
-                        _draft = _draft.copyWith(certifiedOnly: v);
-                      }),
-                    ),
-                  ],
-                ),
-              ),
+    if (chips.isEmpty) return const SizedBox.shrink();
 
-              const SizedBox(height: 8),
-
-              // Action buttons
-              Row(
-                children: [
-                  Expanded(
-                    child: SizedBox(
-                      height: 48,
-                      child: OutlinedButton(
-                        onPressed: () => setState(() {
-                          _draft = _SearchFilters.empty;
-                        }),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.navy,
-                          side: const BorderSide(
-                              color: AppColors.navy, width: 1.5),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          textStyle: const TextStyle(
-                            fontFamily: 'Sora',
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        child: const Text('Clear all'),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: SizedBox(
-                      height: 48,
-                      child: ElevatedButton(
-                        onPressed: () => Navigator.pop(context, _draft),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.navy,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          elevation: 0,
-                          textStyle: const TextStyle(
-                            fontFamily: 'Sora',
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        child: const Text('Apply filters'),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _FilterSection extends StatelessWidget {
-  const _FilterSection({required this.title, required this.child});
-  final String title;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: AppColors.navy,
-            ),
-          ),
-          const SizedBox(height: 10),
-          child,
-        ],
+    return SizedBox(
+      height: 32,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: chips.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 6),
+        itemBuilder: (_, i) => chips[i],
       ),
     );
   }
 }
 
-class _ChipGrid extends StatelessWidget {
-  const _ChipGrid({
-    required this.items,
-    required this.selected,
-    required this.onSelected,
-  });
-
-  final List<String> items;
-  final String? selected;
-  final ValueChanged<String> onSelected;
+class _ActiveChip extends StatelessWidget {
+  const _ActiveChip({required this.label, required this.onRemove});
+  final String label;
+  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: items.map((item) {
-        final isActive = item == selected;
-        return GestureDetector(
-          onTap: () => onSelected(item),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            decoration: BoxDecoration(
-              color: isActive ? AppColors.navy : Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              border: isActive
-                  ? null
-                  : Border.all(color: AppColors.sand, width: 1),
-            ),
-            child: Text(
-              item,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: isActive ? Colors.white : AppColors.navy,
-              ),
+    return Container(
+      padding: const EdgeInsetsDirectional.only(start: 10, end: 4),
+      decoration: BoxDecoration(
+        color: AppColors.gold.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.gold.withOpacity(0.3), width: 0.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontFamily: 'NotoKufiArabic',
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppColors.gold,
             ),
           ),
-        );
-      }).toList(),
+          const SizedBox(width: 2),
+          GestureDetector(
+            onTap: onRemove,
+            child: const Padding(
+              padding: EdgeInsets.all(4),
+              child: Icon(Icons.close_rounded, size: 14, color: AppColors.gold),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

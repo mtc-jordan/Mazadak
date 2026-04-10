@@ -7,13 +7,15 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select
+
 from app.core.database import get_db
 from app.core.types import UUIDPath
 from app.services.auth.dependencies import require_kyc
 from app.services.auth.models import User
 from app.services.listing import schemas, service
 from app.services.listing.dependencies import get_listing_or_404, get_own_listing
-from app.services.listing.models import Listing
+from app.services.listing.models import Listing, ListingStatus
 
 router = APIRouter(prefix="/listings", tags=["listings"])
 
@@ -145,6 +147,39 @@ async def list_listings(
         limit=limit,
         offset=offset,
     )
+
+
+# ── GET /mine — My listings grouped by status ─────────────────
+
+@router.get("/mine", response_model=schemas.MyListingsResponse)
+async def list_my_listings(
+    user: User = Depends(require_kyc),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the caller's listings grouped by status."""
+    result = await db.execute(
+        select(Listing).where(Listing.seller_id == user.id)
+    )
+    listings = result.scalars().all()
+
+    groups: dict[str, list[schemas.ListingResponse]] = {
+        "active": [],
+        "ended": [],
+        "draft": [],
+        "pending": [],
+    }
+    for lst in listings:
+        resp = _listing_to_response(lst, seller=user)
+        if lst.status == ListingStatus.ACTIVE:
+            groups["active"].append(resp)
+        elif lst.status == ListingStatus.ENDED:
+            groups["ended"].append(resp)
+        elif lst.status == ListingStatus.DRAFT:
+            groups["draft"].append(resp)
+        elif lst.status == ListingStatus.PENDING_REVIEW:
+            groups["pending"].append(resp)
+
+    return schemas.MyListingsResponse(**groups)
 
 
 # ── GET /:id ───────────────────────────────────────────────────

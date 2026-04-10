@@ -58,6 +58,28 @@ class ProxyBidRequest(BaseModel):
     max_amount: float = Field(..., gt=0)
 
 
+class MyAuctionItem(BaseModel):
+    id: str
+    listing_id: str
+    title_ar: str
+    title_en: str | None = None
+    image_url: str = ""
+    starting_price: float
+    current_price: float
+    currency: str = "JOD"
+    bid_count: int = 0
+    status: str
+    ends_at: str | None = None
+    winner_name: str | None = None
+    is_live: bool = False
+
+
+class MyAuctionsResponse(BaseModel):
+    active: list[MyAuctionItem] = []
+    ended: list[MyAuctionItem] = []
+    won: list[MyAuctionItem] = []
+
+
 class AuctionRoomState(BaseModel):
     """WebSocket current_state event payload."""
     auction_id: str
