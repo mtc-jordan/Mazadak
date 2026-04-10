@@ -375,6 +375,58 @@ async def _recalculate_all_ats_async() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  Checkout.com refund helper
+# ═══════════════════════════════════════════════════════════════════
+
+async def _checkout_refund(
+    checkout_payment_id: str,
+    amount_minor: int,
+    currency: str,
+    reference: str,
+) -> dict:
+    """Issue a partial or full refund via Checkout.com Payments API.
+
+    Returns the parsed JSON response on success, raises on failure.
+    ``amount_minor`` is in the currency's minor units (e.g. fils for JOD,
+    where 1 JOD = 1000 fils).
+    """
+    from app.core.config import settings
+
+    url = f"https://api.checkout.com/payments/{checkout_payment_id}/refunds"
+    headers = {
+        "Authorization": f"Bearer {settings.CHECKOUT_SECRET_KEY}",
+        "Content-Type": "application/json",
+    }
+    body: dict = {"reference": reference}
+    if amount_minor:  # 0 / None → full refund
+        body["amount"] = amount_minor
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(url, headers=headers, json=body)
+
+    if resp.status_code in (200, 201, 202):
+        logger.info(
+            "Checkout.com refund succeeded: payment=%s amount=%s %s ref=%s",
+            checkout_payment_id, amount_minor, currency, reference,
+        )
+        return resp.json()
+
+    error_text = resp.text[:300]
+    logger.error(
+        "Checkout.com refund failed %d: payment=%s ref=%s — %s",
+        resp.status_code, checkout_payment_id, reference, error_text,
+    )
+    raise RuntimeError(
+        f"Checkout.com refund failed ({resp.status_code}): {error_text}"
+    )
+
+
+def _jod_to_minor(amount: float) -> int:
+    """Convert JOD amount to minor units (fils). 1 JOD = 1000 fils."""
+    return int(round(amount * 1000))
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  Seller payout
 # ═══════════════════════════════════════════════════════════════════
 
@@ -385,12 +437,104 @@ async def _recalculate_all_ats_async() -> None:
     default_retry_delay=30,
 )
 def trigger_seller_payout(self, escrow_id: str):
-    """Trigger Checkout.com payout to seller after escrow release."""
-    logger.info("Seller payout triggered for escrow %s", escrow_id)
+    """Trigger payout to seller after escrow release.
+
+    MVP: calculates the platform fee, logs the pending payout, and
+    notifies the seller.  Actual bank transfer requires seller bank
+    details (not yet in the model) and will use the Checkout.com
+    Transfers API once available.
+    """
+    try:
+        asyncio.run(_seller_payout_async(escrow_id))
+    except Exception as exc:
+        logger.error("Seller payout failed for escrow %s: %s", escrow_id, exc)
+        raise self.retry(exc=exc)
+
+
+async def _seller_payout_async(escrow_id: str) -> None:
+    from app.core.config import settings
+    from app.core.database import async_session_factory
+    from app.core.redis import get_redis_client
+    from app.services.escrow.models import EscrowEvent, ActorType
+    from app.services.escrow.service import get_escrow
+    from app.services.notification.service import queue_notification
+
+    if not settings.CHECKOUT_SECRET_KEY:
+        logger.warning(
+            "CHECKOUT_SECRET_KEY not set — skipping seller payout for escrow %s",
+            escrow_id,
+        )
+        return
+
+    redis = await get_redis_client()
+    try:
+        async with async_session_factory() as db:
+            escrow = await get_escrow(escrow_id, db)
+            if not escrow:
+                logger.error("Escrow %s not found for seller payout", escrow_id)
+                return
+
+            if escrow.state not in ("released", "resolved_released"):
+                logger.warning(
+                    "Escrow %s in state %s — expected released/resolved_released, skipping payout",
+                    escrow_id, escrow.state,
+                )
+                return
+
+            # Calculate amounts
+            total = float(escrow.amount)
+            fee_pct = settings.PLATFORM_FEE_PERCENT
+            platform_fee = round(total * fee_pct / 100, 3)
+            seller_net = round(total - platform_fee, 3)
+
+            # Use pre-calculated seller_amount if set, otherwise compute
+            if escrow.seller_amount is not None:
+                seller_net = float(escrow.seller_amount)
+
+            logger.info(
+                "Payout pending: seller=%s amount=%.3f %s "
+                "(total=%.3f fee=%.1f%%) escrow=%s",
+                escrow.seller_id, seller_net, escrow.currency,
+                total, fee_pct, escrow_id,
+            )
+
+            # Record the payout event in the audit trail
+            event = EscrowEvent(
+                escrow_id=escrow_id,
+                from_state=escrow.state,
+                to_state=escrow.state,
+                actor_type=ActorType.SYSTEM,
+                trigger="seller_payout_queued",
+                meta={
+                    "total_amount": str(total),
+                    "platform_fee_percent": fee_pct,
+                    "platform_fee": str(platform_fee),
+                    "seller_net": str(seller_net),
+                    "currency": escrow.currency,
+                    "status": "pending_bank_details",
+                },
+            )
+            db.add(event)
+            await db.commit()
+
+            # Notify seller
+            await queue_notification(
+                escrow.seller_id,
+                "seller_payout_pending",
+                escrow_id,
+                {
+                    "escrow_id": escrow_id,
+                    "amount": str(seller_net),
+                    "currency": escrow.currency,
+                },
+                redis=redis,
+            )
+    finally:
+        await redis.aclose()
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  Split payout (50/50 dispute resolution)
+#  Split payout (dispute resolution)
 # ═══════════════════════════════════════════════════════════════════
 
 @celery_app.task(
@@ -400,11 +544,126 @@ def trigger_seller_payout(self, escrow_id: str):
     default_retry_delay=30,
 )
 def trigger_split_payout(self, escrow_id: str, split_ratio_buyer: int = 50):
-    """Trigger split payout after dispute resolution."""
-    logger.info(
-        "Split payout triggered for escrow %s (buyer=%d%%)",
-        escrow_id, split_ratio_buyer,
-    )
+    """Trigger split payout after dispute resolution.
+
+    Issues a partial refund to the buyer via Checkout.com for their share,
+    and logs the seller's share as a pending payout.
+    """
+    try:
+        asyncio.run(_split_payout_async(escrow_id, split_ratio_buyer))
+    except Exception as exc:
+        logger.error(
+            "Split payout failed for escrow %s: %s", escrow_id, exc,
+        )
+        raise self.retry(exc=exc)
+
+
+async def _split_payout_async(escrow_id: str, split_ratio_buyer: int) -> None:
+    from app.core.config import settings
+    from app.core.database import async_session_factory
+    from app.core.redis import get_redis_client
+    from app.services.escrow.models import EscrowEvent, ActorType
+    from app.services.escrow.service import get_escrow
+    from app.services.notification.service import queue_notification
+
+    if not settings.CHECKOUT_SECRET_KEY:
+        logger.warning(
+            "CHECKOUT_SECRET_KEY not set — skipping split payout for escrow %s",
+            escrow_id,
+        )
+        return
+
+    redis = await get_redis_client()
+    try:
+        async with async_session_factory() as db:
+            escrow = await get_escrow(escrow_id, db)
+            if not escrow:
+                logger.error("Escrow %s not found for split payout", escrow_id)
+                return
+
+            if escrow.state != "resolved_split":
+                logger.warning(
+                    "Escrow %s in state %s — expected resolved_split, skipping",
+                    escrow_id, escrow.state,
+                )
+                return
+
+            if not escrow.checkout_payment_id:
+                logger.error(
+                    "Escrow %s has no checkout_payment_id — cannot refund buyer",
+                    escrow_id,
+                )
+                return
+
+            total = float(escrow.amount)
+            buyer_refund_amount = round(total * split_ratio_buyer / 100, 3)
+            seller_payout_amount = round(total - buyer_refund_amount, 3)
+
+            # Issue partial refund to buyer via Checkout.com
+            buyer_refund_minor = _jod_to_minor(buyer_refund_amount)
+            refund_result = await _checkout_refund(
+                checkout_payment_id=escrow.checkout_payment_id,
+                amount_minor=buyer_refund_minor,
+                currency=escrow.currency,
+                reference=f"split-buyer-{escrow_id}",
+            )
+
+            logger.info(
+                "Split payout: escrow=%s buyer_refund=%.3f seller_payout=%.3f %s "
+                "(ratio=%d/%d)",
+                escrow_id, buyer_refund_amount, seller_payout_amount,
+                escrow.currency, split_ratio_buyer, 100 - split_ratio_buyer,
+            )
+
+            # Record audit event
+            event = EscrowEvent(
+                escrow_id=escrow_id,
+                from_state=escrow.state,
+                to_state=escrow.state,
+                actor_type=ActorType.SYSTEM,
+                trigger="split_payout_executed",
+                meta={
+                    "total_amount": str(total),
+                    "buyer_refund": str(buyer_refund_amount),
+                    "seller_payout": str(seller_payout_amount),
+                    "split_ratio_buyer": split_ratio_buyer,
+                    "currency": escrow.currency,
+                    "checkout_refund_id": refund_result.get("action_id", ""),
+                    "seller_payout_status": "pending_bank_details",
+                },
+            )
+            db.add(event)
+            await db.commit()
+
+            # Notify buyer
+            await queue_notification(
+                escrow.winner_id,
+                "buyer_refund_processed",
+                escrow_id,
+                {
+                    "escrow_id": escrow_id,
+                    "amount": str(buyer_refund_amount),
+                    "currency": escrow.currency,
+                    "type": "split",
+                },
+                redis=redis,
+            )
+
+            # Notify seller
+            await queue_notification(
+                escrow.seller_id,
+                "seller_payout_pending",
+                escrow_id,
+                {
+                    "escrow_id": escrow_id,
+                    "amount": str(seller_payout_amount),
+                    "currency": escrow.currency,
+                    "type": "split",
+                },
+                redis=redis,
+            )
+    finally:
+        await redis.aclose()
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -418,8 +677,99 @@ def trigger_split_payout(self, escrow_id: str, split_ratio_buyer: int = 50):
     default_retry_delay=30,
 )
 def trigger_buyer_refund(self, escrow_id: str):
-    """Trigger Checkout.com refund to buyer after dispute resolution."""
-    logger.info("Buyer refund triggered for escrow %s", escrow_id)
+    """Trigger full Checkout.com refund to buyer after dispute resolution."""
+    try:
+        asyncio.run(_buyer_refund_async(escrow_id))
+    except Exception as exc:
+        logger.error("Buyer refund failed for escrow %s: %s", escrow_id, exc)
+        raise self.retry(exc=exc)
+
+
+async def _buyer_refund_async(escrow_id: str) -> None:
+    from app.core.config import settings
+    from app.core.database import async_session_factory
+    from app.core.redis import get_redis_client
+    from app.services.escrow.models import EscrowEvent, ActorType
+    from app.services.escrow.service import get_escrow
+    from app.services.notification.service import queue_notification
+
+    if not settings.CHECKOUT_SECRET_KEY:
+        logger.warning(
+            "CHECKOUT_SECRET_KEY not set — skipping buyer refund for escrow %s",
+            escrow_id,
+        )
+        return
+
+    redis = await get_redis_client()
+    try:
+        async with async_session_factory() as db:
+            escrow = await get_escrow(escrow_id, db)
+            if not escrow:
+                logger.error("Escrow %s not found for buyer refund", escrow_id)
+                return
+
+            if escrow.state != "resolved_refunded":
+                logger.warning(
+                    "Escrow %s in state %s — expected resolved_refunded, skipping",
+                    escrow_id, escrow.state,
+                )
+                return
+
+            if not escrow.checkout_payment_id:
+                logger.error(
+                    "Escrow %s has no checkout_payment_id — cannot issue refund",
+                    escrow_id,
+                )
+                return
+
+            total = float(escrow.amount)
+
+            # Full refund — pass 0 to omit amount field (Checkout.com
+            # treats missing amount as full refund)
+            refund_result = await _checkout_refund(
+                checkout_payment_id=escrow.checkout_payment_id,
+                amount_minor=0,
+                currency=escrow.currency,
+                reference=f"refund-{escrow_id}",
+            )
+
+            logger.info(
+                "Full buyer refund issued: escrow=%s amount=%.3f %s",
+                escrow_id, total, escrow.currency,
+            )
+
+            # Record audit event
+            event = EscrowEvent(
+                escrow_id=escrow_id,
+                from_state=escrow.state,
+                to_state=escrow.state,
+                actor_type=ActorType.SYSTEM,
+                trigger="buyer_refund_executed",
+                meta={
+                    "amount": str(total),
+                    "currency": escrow.currency,
+                    "checkout_refund_id": refund_result.get("action_id", ""),
+                    "type": "full_refund",
+                },
+            )
+            db.add(event)
+            await db.commit()
+
+            # Notify buyer
+            await queue_notification(
+                escrow.winner_id,
+                "buyer_refund_processed",
+                escrow_id,
+                {
+                    "escrow_id": escrow_id,
+                    "amount": str(total),
+                    "currency": escrow.currency,
+                    "type": "full",
+                },
+                redis=redis,
+            )
+    finally:
+        await redis.aclose()
 
 
 # ═══════════════════════════════════════════════════════════════════

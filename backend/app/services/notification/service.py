@@ -150,6 +150,10 @@ async def dispatch_notification_impl(
                 from app.services.notification.dispatchers import dispatch_whatsapp
                 results["whatsapp"] = await dispatch_whatsapp(user, notification, redis)
 
+            if NotificationChannel.EMAIL in channels:
+                from app.services.notification.dispatchers import dispatch_email
+                results["email"] = await dispatch_email(user, notification)
+
             # -- Update channels_sent --
             notification.channels_sent = results
             await db.commit()
@@ -182,6 +186,7 @@ async def _resolve_channels(
             NotificationChannel.PUSH,
             NotificationChannel.SMS,
             NotificationChannel.WHATSAPP,
+            NotificationChannel.EMAIL,
         }
 
     result = await db.execute(
@@ -197,6 +202,8 @@ async def _resolve_channels(
         channels.add(NotificationChannel.SMS)
     if pref is None or pref.whatsapp_enabled:
         channels.add(NotificationChannel.WHATSAPP)
+    if pref is None or pref.email_enabled:
+        channels.add(NotificationChannel.EMAIL)
 
     return channels
 

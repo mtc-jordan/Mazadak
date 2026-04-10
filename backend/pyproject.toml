@@ -50,6 +50,7 @@ dependencies = [
     # --- Notifications ---
     "firebase-admin>=6.5.0",        # FCM push
     "twilio>=9.3.0",                # SMS / WhatsApp
+    "aiosmtplib>=2.0.0",            # async SMTP for email
 
     # --- Shipping ---
     "aramex-sdk>=1.0.0",

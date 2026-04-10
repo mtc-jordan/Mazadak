@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     CHECKOUT_SECRET_KEY: str = ""
     CHECKOUT_PUBLIC_KEY: str = ""
     CHECKOUT_WEBHOOK_SECRET: str = ""
+    PLATFORM_FEE_PERCENT: float = 5.0  # 5% platform commission
 
     # ── AWS ──────────────────────────────────────────────────────
     AWS_REGION: str = "me-south-1"
@@ -121,6 +122,16 @@ class Settings(BaseSettings):
     WHATSAPP_WEBHOOK_VERIFY_TOKEN: str = ""     # Custom token for GET verification
     META_WEBHOOK_SECRET: str = ""               # HMAC secret for bot webhook verification
     WHATSAPP_RATE_LIMIT_PER_DAY: int = 5  # non-critical per user
+
+    # ── Email (SMTP / SendGrid) ─────────────────────────────────
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = "noreply@mzadak.com"
+    SMTP_FROM_NAME: str = "MZADAK"
+    SENDGRID_API_KEY: str = ""
+    EMAIL_PROVIDER: str = "smtp"  # "smtp" or "sendgrid"
 
     # ── Rate limits ──────────────────────────────────────────────
     RATE_LIMIT_AUTH: int = 1000            # req/min authenticated

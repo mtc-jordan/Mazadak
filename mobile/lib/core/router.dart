@@ -14,6 +14,7 @@ import '../screens/settings/settings_screen.dart';
 import '../screens/settings/whatsapp_bot_screen.dart';
 import '../screens/notifications/notifications_screen.dart';
 import '../screens/charity/charity_screen.dart';
+import '../screens/seller/my_auctions_screen.dart';
 import '../screens/seller/my_listings_screen.dart';
 import '../screens/snap_to_list_screen.dart';
 import '../screens/auth/kyc_screen.dart';
@@ -154,7 +155,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: AppRoutes.myAuctions,
             pageBuilder: (_, __) => SubtleFadePage(
-              child: const _PlaceholderScreen('My Auctions'),
+              child: const MyAuctionsScreen(),
             ),
           ),
           // Profile: FadeScaleTransition — like zooming into settings

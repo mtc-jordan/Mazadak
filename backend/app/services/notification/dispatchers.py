@@ -4,6 +4,7 @@ Channel dispatchers — FR-NOTIF-001 -> FR-NOTIF-012.
 dispatch_fcm(user, notification)   — iterate user.fcm_tokens, remove stale
 dispatch_whatsapp(user, notification, redis) — Meta Cloud API, pre-approved templates
 dispatch_sms(user, notification)   — Twilio primary, AWS SNS fallback, 160 char truncation
+dispatch_email(user, notification) — SMTP primary, SendGrid fallback, branded HTML
 """
 
 from __future__ import annotations
@@ -234,4 +235,154 @@ async def _send_sms_sns(phone: str, body: str) -> bool:
         return True
     except Exception as exc:
         logger.error("AWS SNS SMS failed: %s", exc)
+        return False
+
+
+# =====================================================================
+#  Email — SMTP primary, SendGrid fallback, branded HTML
+# =====================================================================
+
+async def dispatch_email(user: User, notification: Notification) -> dict:
+    """Send email notification. SMTP primary, SendGrid fallback."""
+    email = getattr(user, "email", None)
+    if not email:
+        return {"status": "skipped", "reason": "no_email"}
+
+    lang = getattr(user, "preferred_language", "ar")
+    title = notification.title_ar if lang == "ar" else notification.title_en
+    body = notification.body_ar if lang == "ar" else notification.body_en
+
+    html_body = _build_email_html(title, body, lang)
+
+    from app.core.config import settings
+
+    if settings.EMAIL_PROVIDER == "sendgrid" and settings.SENDGRID_API_KEY:
+        if await _send_email_sendgrid(email, title, html_body, settings):
+            return {"status": "sent"}
+        logger.info("SendGrid failed, falling back to SMTP for %s", email)
+
+    if settings.SMTP_HOST:
+        if await _send_email_smtp(email, title, html_body, settings):
+            return {"status": "sent"}
+    else:
+        logger.warning("Email not configured (no SMTP_HOST) — skipping")
+        return {"status": "skipped", "reason": "email_not_configured"}
+
+    return {"status": "failed"}
+
+
+def _build_email_html(title: str, body: str, lang: str) -> str:
+    """Build a branded HTML email with MZADAK styling."""
+    direction = "rtl" if lang == "ar" else "ltr"
+    font_family = "'Segoe UI', Tahoma, Arial, sans-serif"
+
+    return f"""\
+<!DOCTYPE html>
+<html lang="{lang}" dir="{direction}">
+<head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background-color:#FFF8F0;font-family:{font_family};">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#FFF8F0;">
+    <tr>
+      <td align="center" style="padding:24px 0;">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#FFFFFF;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+          <!-- Header -->
+          <tr>
+            <td style="background-color:#1B2A4A;padding:24px 32px;text-align:center;">
+              <h1 style="margin:0;color:#D4A853;font-size:28px;font-weight:700;letter-spacing:1px;">MZADAK</h1>
+            </td>
+          </tr>
+          <!-- Title -->
+          <tr>
+            <td style="padding:24px 32px 8px 32px;">
+              <h2 style="margin:0;color:#1B2A4A;font-size:20px;font-weight:600;direction:{direction};text-align:start;">{title}</h2>
+            </td>
+          </tr>
+          <!-- Body -->
+          <tr>
+            <td style="padding:8px 32px 32px 32px;">
+              <p style="margin:0;color:#333333;font-size:16px;line-height:1.6;direction:{direction};text-align:start;">{body}</p>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="background-color:#F5F5F5;padding:16px 32px;text-align:center;border-top:2px solid #D4A853;">
+              <p style="margin:0;color:#888888;font-size:12px;">&copy; MZADAK &mdash; مزادك</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
+async def _send_email_smtp(
+    to_email: str,
+    subject: str,
+    html_body: str,
+    settings: object,
+) -> bool:
+    """Send email via SMTP using aiosmtplib."""
+    try:
+        import aiosmtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+
+        msg = MIMEMultipart("alternative")
+        msg["From"] = f"{settings.SMTP_FROM_NAME} <{settings.SMTP_FROM_EMAIL}>"
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+        await aiosmtplib.send(
+            msg,
+            hostname=settings.SMTP_HOST,
+            port=settings.SMTP_PORT,
+            username=settings.SMTP_USERNAME or None,
+            password=settings.SMTP_PASSWORD or None,
+            start_tls=True,
+        )
+        return True
+    except ImportError:
+        logger.warning("aiosmtplib not installed — skipping SMTP email")
+        return False
+    except Exception as exc:
+        logger.error("SMTP email send failed: %s", exc)
+        return False
+
+
+async def _send_email_sendgrid(
+    to_email: str,
+    subject: str,
+    html_body: str,
+    settings: object,
+) -> bool:
+    """Send email via SendGrid API."""
+    url = "https://api.sendgrid.com/v3/mail/send"
+    headers = {
+        "Authorization": f"Bearer {settings.SENDGRID_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "personalizations": [{"to": [{"email": to_email}]}],
+        "from": {
+            "email": settings.SMTP_FROM_EMAIL,
+            "name": settings.SMTP_FROM_NAME,
+        },
+        "subject": subject,
+        "content": [{"type": "text/html", "value": html_body}],
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+        if resp.status_code in (200, 201, 202):
+            return True
+        logger.warning(
+            "SendGrid API returned %d: %s", resp.status_code, resp.text[:200]
+        )
+        return False
+    except Exception as exc:
+        logger.error("SendGrid email send failed: %s", exc)
         return False
