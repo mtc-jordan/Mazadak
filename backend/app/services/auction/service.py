@@ -255,11 +255,13 @@ async def handle_auction_expiry(
     if winner_id and seller_id:
         try:
             from app.services.escrow.service import create_escrow
+            # price is in cents from Redis; escrow.amount must be JOD
+            amount_jod = round(price / 100, 2)
             escrow = await create_escrow(
                 auction_id=auction_id,
                 winner_id=winner_id,
                 seller_id=seller_id,
-                amount=price,
+                amount=amount_jod,
                 currency="JOD",
                 db=db,
             )
@@ -282,7 +284,7 @@ async def handle_auction_expiry(
                 "payload": {
                     "auction_id": auction_id,
                     "winner_id": winner_id,
-                    "final_price": price,
+                    "final_price": round(price / 100, 2),
                     "bid_count": bid_count,
                     "outcome": outcome,
                 },
@@ -295,25 +297,26 @@ async def handle_auction_expiry(
     try:
         from app.tasks.notification import send_notification
 
+        price_jod = round(price / 100, 2)
         if outcome == "winner":
             send_notification.delay(
                 event="winner_notification",
                 auction_id=auction_id,
                 user_id=winner_id,
-                data={"final_price": price},
+                data={"final_price": price_jod},
             )
             send_notification.delay(
                 event="seller_auction_ended",
                 auction_id=auction_id,
                 user_id=seller_id,
-                data={"final_price": price, "winner_id": winner_id},
+                data={"final_price": price_jod, "winner_id": winner_id},
             )
         elif outcome == "reserve_not_met":
             send_notification.delay(
                 event="reserve_not_met",
                 auction_id=auction_id,
                 user_id=seller_id,
-                data={"final_price": price, "reserve": reserve_price},
+                data={"final_price": price_jod, "reserve": round(reserve_price / 100, 2)},
             )
         elif outcome == "no_bids":
             send_notification.delay(

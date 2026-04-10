@@ -172,11 +172,13 @@ async def _notify_second_bidder_async(auction_id: str) -> None:
                 return
 
             # Create new escrow for second bidder
+            # second_bid.amount is stored in cents; escrow.amount must be JOD
+            amount_jod = round(float(second_bid.amount) / 100, 2)
             escrow = await create_escrow(
                 auction_id=auction_id,
                 winner_id=second_bid.user_id,
                 seller_id=listing.seller_id,
-                amount=float(second_bid.amount),
+                amount=amount_jod,
                 currency=second_bid.currency,
                 db=db,
             )

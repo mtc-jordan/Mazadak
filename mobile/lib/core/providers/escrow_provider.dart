@@ -9,17 +9,23 @@ import 'package:image_picker/image_picker.dart';
 
 import 'core_providers.dart';
 
-/// Escrow status constants matching backend enum.
+/// Escrow status constants matching backend EscrowState enum (lowercase snake_case).
 abstract final class EscrowStatus {
-  static const paymentPending = 'PAYMENT_PENDING';
-  static const paid = 'PAID';
-  static const shippingRequested = 'SHIPPING_REQUESTED';
-  static const inTransit = 'IN_TRANSIT';
-  static const inspectionPeriod = 'INSPECTION_PERIOD';
-  static const delivered = 'DELIVERED';
-  static const released = 'RELEASED';
-  static const disputed = 'DISPUTED';
-  static const refunded = 'REFUNDED';
+  static const paymentPending = 'payment_pending';
+  static const fundsHeld = 'funds_held';
+  static const shippingRequested = 'shipping_requested';
+  static const labelGenerated = 'label_generated';
+  static const shipped = 'shipped';
+  static const inTransit = 'in_transit';
+  static const delivered = 'delivered';
+  static const inspectionPeriod = 'inspection_period';
+  static const released = 'released';
+  static const disputed = 'disputed';
+  static const underReview = 'under_review';
+  static const resolvedReleased = 'resolved_released';
+  static const resolvedRefunded = 'resolved_refunded';
+  static const resolvedSplit = 'resolved_split';
+  static const cancelled = 'cancelled';
 }
 
 /// Escrow state for a specific transaction.
@@ -31,6 +37,7 @@ class EscrowState {
     this.sellerId,
     this.amount,
     this.currency,
+    this.paymentLink,
     this.paymentDeadline,
     this.shippingDeadline,
     this.inspectionDeadline,
@@ -50,6 +57,7 @@ class EscrowState {
   final String? sellerId;
   final double? amount;
   final String? currency;
+  final String? paymentLink;
   final String? paymentDeadline;
   final String? shippingDeadline;
   final String? inspectionDeadline;
@@ -65,11 +73,15 @@ class EscrowState {
   /// The 5-step progress index (0-based).
   int get stepIndex => switch (status) {
         EscrowStatus.paymentPending => 0,
-        EscrowStatus.paid => 0,
-        EscrowStatus.shippingRequested => 1,
+        EscrowStatus.fundsHeld => 1,
+        EscrowStatus.shippingRequested ||
+        EscrowStatus.labelGenerated ||
+        EscrowStatus.shipped => 1,
         EscrowStatus.inTransit => 2,
-        EscrowStatus.inspectionPeriod || EscrowStatus.delivered => 3,
-        EscrowStatus.released => 4,
+        EscrowStatus.delivered ||
+        EscrowStatus.inspectionPeriod => 3,
+        EscrowStatus.released ||
+        EscrowStatus.resolvedReleased => 4,
         _ => 0,
       };
 
@@ -80,6 +92,7 @@ class EscrowState {
     String? sellerId,
     double? amount,
     String? currency,
+    String? paymentLink,
     String? paymentDeadline,
     String? shippingDeadline,
     String? inspectionDeadline,
@@ -98,6 +111,7 @@ class EscrowState {
         sellerId: sellerId ?? this.sellerId,
         amount: amount ?? this.amount,
         currency: currency ?? this.currency,
+        paymentLink: paymentLink ?? this.paymentLink,
         paymentDeadline: paymentDeadline ?? this.paymentDeadline,
         shippingDeadline: shippingDeadline ?? this.shippingDeadline,
         inspectionDeadline: inspectionDeadline ?? this.inspectionDeadline,
@@ -171,11 +185,12 @@ class EscrowNotifier extends StateNotifier<EscrowState> {
 
       state = EscrowState(
         escrowId: escrowId,
-        status: data['status'] as String?,
-        buyerId: data['buyer_id'] as String?,
+        status: data['state'] as String?,
+        buyerId: data['winner_id'] as String?,
         sellerId: data['seller_id'] as String?,
         amount: (data['amount'] as num?)?.toDouble(),
         currency: data['currency'] as String?,
+        paymentLink: data['payment_link'] as String?,
         paymentDeadline: data['payment_deadline'] as String?,
         shippingDeadline: data['shipping_deadline'] as String?,
         inspectionDeadline: data['inspection_deadline'] as String?,
@@ -192,6 +207,27 @@ class EscrowNotifier extends StateNotifier<EscrowState> {
       );
     } catch (e) {
       state = state.copyWith(isLoading: false, error: e.toString());
+    }
+  }
+
+  /// Initiate payment — calls backend to create Checkout.com payment link.
+  ///
+  /// Returns the payment URL to open in a browser/webview, or null on error.
+  Future<String?> payNow() async {
+    state = state.copyWith(isLoading: true, error: null);
+    try {
+      final api = ref.read(apiClientProvider);
+      final resp = await api.post('/escrow/$escrowId/pay');
+      final data = resp.data as Map<String, dynamic>;
+      final paymentLink = data['payment_link'] as String?;
+      state = state.copyWith(
+        isLoading: false,
+        paymentLink: paymentLink,
+      );
+      return paymentLink;
+    } catch (e) {
+      state = state.copyWith(isLoading: false, error: e.toString());
+      return null;
     }
   }
 

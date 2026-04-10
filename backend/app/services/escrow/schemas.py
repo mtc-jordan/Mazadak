@@ -37,6 +37,12 @@ class FileDisputeRequest(BaseModel):
     evidence_s3_keys: list[str] = Field(default_factory=list, max_length=5)
 
 
+class InitiatePaymentResponse(BaseModel):
+    escrow_id: str
+    payment_link: str
+    expires_at: str | None = None
+
+
 class EscrowEventOut(BaseModel):
     id: str
     escrow_id: str

@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     CHECKOUT_SECRET_KEY: str = ""
     CHECKOUT_PUBLIC_KEY: str = ""
     CHECKOUT_WEBHOOK_SECRET: str = ""
+    CHECKOUT_SUCCESS_URL: str = "https://mzadak.com/payment/success"
+    CHECKOUT_FAILURE_URL: str = "https://mzadak.com/payment/failure"
     PLATFORM_FEE_PERCENT: float = 5.0  # 5% platform commission
 
     # ── AWS ──────────────────────────────────────────────────────

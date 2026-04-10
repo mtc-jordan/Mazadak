@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/l10n/arabic_numerals.dart';
 import '../../core/providers/auth_provider.dart';
@@ -140,11 +141,15 @@ class EscrowOrderScreen extends ConsumerWidget {
     );
   }
 
-  void _onPayNow(BuildContext context, WidgetRef ref) {
-    // Navigate to payment screen for this escrow
-    Navigator.of(context).pushNamed(
-      '/escrow/$escrowId/pay',
-    );
+  void _onPayNow(BuildContext context, WidgetRef ref) async {
+    final notifier = ref.read(escrowProvider(escrowId).notifier);
+    final paymentLink = await notifier.payNow();
+    if (paymentLink != null && context.mounted) {
+      final uri = Uri.parse(paymentLink);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    }
   }
 
   void _onGenerateLabel(BuildContext context, WidgetRef ref) async {
@@ -213,8 +218,9 @@ class EscrowOrderScreen extends ConsumerWidget {
   }
 
   Color _statusColor(String? status) => switch (status) {
-        EscrowStatus.released => AppColors.emerald,
-        EscrowStatus.disputed || EscrowStatus.refunded => AppColors.ember,
+        EscrowStatus.released || EscrowStatus.resolvedReleased => AppColors.emerald,
+        EscrowStatus.disputed || EscrowStatus.resolvedRefunded ||
+        EscrowStatus.cancelled => AppColors.ember,
         EscrowStatus.paymentPending => AppColors.gold,
         EscrowStatus.inspectionPeriod => AppColors.gold,
         _ => AppColors.navy,
@@ -222,14 +228,18 @@ class EscrowOrderScreen extends ConsumerWidget {
 
   String _statusLabel(String? status) => switch (status) {
         EscrowStatus.paymentPending => 'بانتظار الدفع',
-        EscrowStatus.paid => 'تم الدفع',
+        EscrowStatus.fundsHeld => 'تم الدفع',
         EscrowStatus.shippingRequested => 'بانتظار الشحن',
+        EscrowStatus.labelGenerated => 'تم إنشاء بوليصة الشحن',
+        EscrowStatus.shipped => 'تم الشحن',
         EscrowStatus.inTransit => 'في الطريق',
         EscrowStatus.inspectionPeriod => 'فترة الفحص',
         EscrowStatus.delivered => 'تم التسليم',
-        EscrowStatus.released => 'تم الإفراج',
-        EscrowStatus.disputed => 'نزاع',
-        EscrowStatus.refunded => 'مسترد',
+        EscrowStatus.released || EscrowStatus.resolvedReleased => 'تم الإفراج',
+        EscrowStatus.disputed || EscrowStatus.underReview => 'نزاع',
+        EscrowStatus.resolvedRefunded => 'مسترد',
+        EscrowStatus.resolvedSplit => 'تسوية جزئية',
+        EscrowStatus.cancelled => 'ملغي',
         _ => 'غير معروف',
       };
 }
@@ -402,7 +412,7 @@ class _DeadlineCardState extends State<_DeadlineCard> {
       return widget.escrow.inspectionDeadline;
     }
     if (widget.escrow.status == EscrowStatus.paymentPending ||
-        widget.escrow.status == EscrowStatus.paid) {
+        widget.escrow.status == EscrowStatus.fundsHeld) {
       return widget.escrow.paymentDeadline;
     }
     return null;
