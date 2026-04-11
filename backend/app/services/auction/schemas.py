@@ -82,6 +82,36 @@ class MyAuctionsResponse(BaseModel):
     won: list[MyAuctionItem] = []
 
 
+class AuctionListItem(BaseModel):
+    """Public auction card for browse/home screen."""
+    id: str
+    listing_id: str
+    title_ar: str
+    title_en: str | None = None
+    image_url: str = ""
+    category_id: int
+    condition: str
+    starting_price: int
+    current_price: float
+    currency: str = "JOD"
+    min_increment: float
+    bid_count: int = 0
+    status: str
+    starts_at: datetime
+    ends_at: datetime
+    is_charity: bool = False
+    is_certified: bool = False
+    location_city: str | None = None
+    location_country: str = "JO"
+
+
+class AuctionListResponse(BaseModel):
+    data: list[AuctionListItem]
+    total_count: int
+    limit: int
+    offset: int
+
+
 class AuctionRoomState(BaseModel):
     """WebSocket current_state event payload."""
     auction_id: str

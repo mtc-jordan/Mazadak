@@ -253,3 +253,49 @@ async def mark_as_read(
         count += 1
     await db.commit()
     return count
+
+
+# =====================================================================
+#  Notification preferences
+# =====================================================================
+
+async def get_preferences(
+    user_id: str, db: AsyncSession,
+) -> NotificationPreference | None:
+    result = await db.execute(
+        select(NotificationPreference)
+        .where(NotificationPreference.user_id == user_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def update_preferences(
+    user_id: str,
+    updates: dict,
+    db: AsyncSession,
+) -> NotificationPreference:
+    result = await db.execute(
+        select(NotificationPreference)
+        .where(NotificationPreference.user_id == user_id)
+    )
+    pref = result.scalar_one_or_none()
+
+    if pref is None:
+        from uuid import uuid4
+        pref = NotificationPreference(
+            id=str(uuid4()),
+            user_id=user_id,
+            push_enabled=True,
+            sms_enabled=True,
+            email_enabled=True,
+            whatsapp_enabled=True,
+        )
+        db.add(pref)
+
+    for key, value in updates.items():
+        if value is not None and hasattr(pref, key):
+            setattr(pref, key, value)
+
+    await db.commit()
+    await db.refresh(pref)
+    return pref

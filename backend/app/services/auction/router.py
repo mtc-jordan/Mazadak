@@ -1,10 +1,10 @@
 """Auction endpoints — SDD §5.4."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 
 from app.core.database import get_db
 from app.core.redis import get_redis
@@ -17,6 +17,94 @@ from app.services.auction.models import Auction, AuctionStatus
 from app.services.listing.models import Listing
 
 router = APIRouter(prefix="/auctions", tags=["auctions"])
+
+
+# ── GET / — Public auction list with filters ─────────────────
+
+@router.get("/", response_model=schemas.AuctionListResponse)
+async def list_auctions(
+    status_filter: str | None = Query(default=None, alias="status"),
+    category_id: int | None = None,
+    sort: str | None = Query(
+        default=None,
+        pattern=r"^(ends_at_asc|price_asc|price_desc|bid_count_desc|newest)$",
+    ),
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """List auctions with optional filters. Defaults to active only."""
+    query = (
+        select(Auction, Listing)
+        .join(Listing, Auction.listing_id == Listing.id)
+    )
+
+    # Default to active auctions for public browsing
+    if status_filter:
+        query = query.where(Auction.status == status_filter)
+    else:
+        query = query.where(Auction.status == AuctionStatus.ACTIVE.value)
+
+    if category_id is not None:
+        query = query.where(Listing.category_id == category_id)
+
+    # Count
+    count_q = select(func.count()).select_from(
+        query.with_only_columns(Auction.id).subquery()
+    )
+    total = (await db.execute(count_q)).scalar() or 0
+
+    # Sort
+    if sort == "price_asc":
+        query = query.order_by(Auction.current_price.asc())
+    elif sort == "price_desc":
+        query = query.order_by(Auction.current_price.desc())
+    elif sort == "bid_count_desc":
+        query = query.order_by(Auction.bid_count.desc())
+    elif sort == "newest":
+        query = query.order_by(Auction.created_at.desc())
+    else:
+        # Default: ending soonest first
+        query = query.order_by(Auction.ends_at.asc())
+
+    query = query.offset(offset).limit(limit)
+    result = await db.execute(query)
+    rows = result.all()
+
+    items = []
+    for auction, listing in rows:
+        image_url = ""
+        if listing.images:
+            image_url = listing.images[0].s3_key
+
+        items.append(schemas.AuctionListItem(
+            id=auction.id,
+            listing_id=auction.listing_id,
+            title_ar=listing.title_ar,
+            title_en=listing.title_en,
+            image_url=image_url,
+            category_id=listing.category_id,
+            condition=listing.condition,
+            starting_price=listing.starting_price,
+            current_price=float(auction.current_price),
+            currency="JOD",
+            min_increment=float(auction.min_increment),
+            bid_count=auction.bid_count,
+            status=auction.status if isinstance(auction.status, str) else auction.status.value,
+            starts_at=auction.starts_at,
+            ends_at=auction.ends_at,
+            is_charity=listing.is_charity,
+            is_certified=listing.is_certified,
+            location_city=listing.location_city,
+            location_country=listing.location_country or "JO",
+        ))
+
+    return schemas.AuctionListResponse(
+        data=items,
+        total_count=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 # ── GET /mine — My auctions (seller + won) ────────────────────
