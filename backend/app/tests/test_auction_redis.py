@@ -102,7 +102,7 @@ async def _init_auction_redis(fake_redis, auction_id, listing):
 def _has_celery() -> bool:
     try:
         import celery  # noqa: F401
-        return True
+        return hasattr(celery, "__version__")  # MagicMock won't have this
     except ImportError:
         return False
 
@@ -277,7 +277,7 @@ class TestHandleExpiryWithWinner:
         call_kw = mock_escrow.call_args.kwargs
         assert call_kw["winner_id"] == BIDDER_ID
         assert call_kw["seller_id"] == SELLER_ID
-        assert call_kw["amount"] == 50000
+        assert call_kw["amount"] == 500.0  # 50000 cents → 500.0 JOD
 
         # DB updated
         await db_session.refresh(auction)

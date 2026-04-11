@@ -79,7 +79,7 @@ class TestDispatchEmail:
             SMTP_FROM_EMAIL="noreply@mzadak.com",
         )
 
-        with patch("app.services.notification.dispatchers.settings", mock_settings):
+        with patch("app.core.config.settings", mock_settings):
             result = await dispatch_email(user, notif)
 
         assert result["status"] == "skipped"

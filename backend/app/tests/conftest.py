@@ -11,9 +11,18 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import sys
 import threading
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
+
+# ── Mock Celery before any app import (celery not installed locally) ──
+if "celery" not in sys.modules:
+    _mock_celery_app = MagicMock()
+    _mock_celery_app.task = lambda *a, **kw: (lambda fn: fn)
+    sys.modules["celery"] = MagicMock()
+    sys.modules["celery.schedules"] = MagicMock()
+    sys.modules["app.core.celery"] = MagicMock(celery_app=_mock_celery_app)
 
 import pytest
 from httpx import ASGITransport, AsyncClient

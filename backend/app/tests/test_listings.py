@@ -727,7 +727,8 @@ class TestListListingsEndpoint:
             json=make_listing_data(),
             headers=verified_auth_headers,
         )
-        resp = await client.get("/api/v1/listings/")
+        # Newly created listings are drafts; query with status=draft
+        resp = await client.get("/api/v1/listings/?status=draft")
         assert resp.status_code == 200
         data = resp.json()
         assert data["total_count"] == 1

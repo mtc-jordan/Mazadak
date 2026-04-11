@@ -166,7 +166,7 @@ class TestWSConnect:
 
         cs = next(e for e in emitted if e["event"] == "current_state")
         assert cs["data"]["auction_id"] == auction_id
-        assert cs["data"]["current_price"] == 10000
+        assert cs["data"]["current_price"] == 100.0  # 10000 cents → 100.0 JOD
         assert cs["data"]["status"] == "ACTIVE"
 
         wu = next(e for e in emitted if e["event"] == "watcher_update")
@@ -302,7 +302,7 @@ class TestWSPlaceBid:
         confirmed = next((e for e in emitted if e["event"] == "bid_confirmed"), None)
         assert confirmed is not None
         assert confirmed["to"] == sid
-        assert confirmed["data"]["amount"] == 20000
+        assert confirmed["data"]["amount"] == 200.0  # 20000 cents → 200.0 JOD
 
         # Redis publish log: bid_update
         published = fake_redis._published
@@ -312,7 +312,7 @@ class TestWSPlaceBid:
         assert channel == f"channel:auction:{auction_id}"
         data = json.loads(data_str)
         assert data["event"] == "bid_update"
-        assert data["payload"]["amount"] == 20000
+        assert data["payload"]["amount"] == 200.0  # 20000 cents → 200.0 JOD
         # user_id should be masked in broadcast
         assert "***" in data["payload"]["user_id"]
 
@@ -404,7 +404,7 @@ class TestWSPlaceBid:
             json.loads(d) for c, d in fake_redis._published
             if json.loads(d)["event"] == "timer_extended"
         )
-        assert "new_ttl" in timer_msg["payload"]
+        assert "remaining_seconds" in timer_msg["payload"]
         assert timer_msg["payload"]["extension_count"] == 1
 
         ns.emit = original_emit

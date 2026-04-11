@@ -11,10 +11,32 @@ Covers:
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import importlib
+
 import pytest
+
+# ── Mock Celery before any app.tasks import ──────────────────────
+_mock_celery_app = MagicMock()
+_mock_celery_app.task = lambda *a, **kw: (lambda fn: fn)
+
+sys.modules.setdefault("celery", MagicMock())
+sys.modules.setdefault("celery.schedules", MagicMock())
+sys.modules.setdefault("app.core.celery", MagicMock(celery_app=_mock_celery_app))
+
+# Ensure app.tasks.escrow is the real module, not a mock left by other tests.
+# Other test files (test_full_flow_integration, test_bot) set app.tasks and
+# app.tasks.escrow to MagicMocks at module level, polluting sys.modules.
+for _mod_name in ["app.tasks", "app.tasks.escrow", "app.tasks.auction",
+                  "app.tasks.notification", "app.tasks.listing"]:
+    _mod = sys.modules.get(_mod_name)
+    if _mod is not None and not hasattr(_mod, "__file__"):
+        del sys.modules[_mod_name]
+# Now re-import the real modules
+import app.tasks.escrow  # noqa: F401
 
 
 # =====================================================================
@@ -74,8 +96,8 @@ class TestSplitPayoutMath:
         ratio = 50
         buyer_refund = round(total * ratio / 100, 3)
         seller_payout = round(total - buyer_refund, 3)
-        assert buyer_refund == 16.667  # half of 33.333 rounded to 3 dp
-        assert seller_payout == 16.666
+        assert buyer_refund == 16.666  # round(33.333 * 50 / 100, 3)
+        assert seller_payout == 16.667
 
     def test_split_with_fractional_fils(self):
         """Split preserves 3 decimal places (fils precision)."""
