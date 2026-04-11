@@ -121,18 +121,18 @@ async def transition_escrow(
     # ── 4. UPDATE escrow state ───────────────────────────────────
     now = datetime.utcnow()
     escrow.state = new_state
-    escrow.last_transition_at = now.isoformat()
+    escrow.last_transition_at = now
     escrow.transition_count = (escrow.transition_count or 0) + 1
 
     # ── 5. Set deadlines based on new state ──────────────────────
     if new_state == "payment_pending":
-        escrow.payment_deadline = (now + timedelta(hours=24)).isoformat()
+        escrow.payment_deadline = now + timedelta(hours=24)
     elif new_state == "shipping_requested":
-        escrow.shipping_deadline = (now + timedelta(hours=48)).isoformat()
+        escrow.shipping_deadline = now + timedelta(hours=48)
     elif new_state == "inspection_period":
-        escrow.inspection_deadline = (now + timedelta(hours=72)).isoformat()
+        escrow.inspection_deadline = now + timedelta(hours=72)
     elif new_state == "under_review":
-        escrow.release_deadline = (now + timedelta(hours=144)).isoformat()
+        escrow.release_deadline = now + timedelta(hours=144)
 
     # ── 6. Commit ────────────────────────────────────────────────
     await db.commit()

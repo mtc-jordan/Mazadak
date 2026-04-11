@@ -5,6 +5,7 @@ Escrow domain models — SDD §3.3 & §4.2.
 """
 
 import enum
+from datetime import datetime
 
 from sqlalchemy import DateTime, Float, Integer, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -101,13 +102,13 @@ class Escrow(Base, TimestampMixin):
     evidence_s3_keys: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     evidence_hashes: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
 
-    payment_deadline: Mapped[str | None] = mapped_column()
-    shipping_deadline: Mapped[str | None] = mapped_column()
-    inspection_deadline: Mapped[str | None] = mapped_column()
-    evidence_deadline: Mapped[str | None] = mapped_column()
-    release_deadline: Mapped[str | None] = mapped_column()
+    payment_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    shipping_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    inspection_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    evidence_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    release_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    last_transition_at: Mapped[str | None] = mapped_column()
+    last_transition_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     transition_count: Mapped[int] = mapped_column(default=0, server_default="0")
 
     retry_count: Mapped[int] = mapped_column(default=0, server_default="0")
@@ -129,8 +130,8 @@ class EscrowEvent(Base):
     actor_type: Mapped[ActorType] = mapped_column(String(10), nullable=False)
     trigger: Mapped[str] = mapped_column(Text, nullable=False)
     meta: Mapped[dict | None] = mapped_column(JSONB)
-    created_at: Mapped[str] = mapped_column(
-        nullable=False, server_default=text("now()"),
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()"),
     )
 
 
@@ -170,8 +171,8 @@ class Dispute(Base, TimestampMixin):
     )
     admin_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False))
     admin_ruling: Mapped[str | None] = mapped_column(Text)
-    admin_ruled_at: Mapped[str | None] = mapped_column(DateTime(timezone=True))
-    auto_resolution_at: Mapped[str | None] = mapped_column(DateTime(timezone=True))
+    admin_ruled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    auto_resolution_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     buyer_evidence_count: Mapped[int] = mapped_column(
         Integer, server_default="0", nullable=False,
     )
@@ -193,7 +194,7 @@ class DisputeEvidence(Base):
     s3_key: Mapped[str] = mapped_column(String(500), nullable=False)
     sha256_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     file_size: Mapped[int | None] = mapped_column(Integer)
-    uploaded_at: Mapped[str] = mapped_column(
+    uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=text("now()"),
@@ -218,7 +219,7 @@ class Rating(Base):
     is_anonymous: Mapped[bool] = mapped_column(
         server_default="false", nullable=False,
     )
-    created_at: Mapped[str] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=text("now()"),

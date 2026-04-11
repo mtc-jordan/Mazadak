@@ -129,7 +129,7 @@ async def initialize_auction(
 
     # 5. Update DB state
     auction.status = AuctionStatus.ACTIVE.value
-    auction.redis_synced_at = now.isoformat()
+    auction.redis_synced_at = now
     listing.status = "active"
     await db.commit()
 

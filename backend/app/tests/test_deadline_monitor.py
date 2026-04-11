@@ -164,7 +164,7 @@ class TestPaymentDeadlineCancellation:
         monitor, mock_tasks = _get_monitor()
 
         # Deadline was 1 hour ago — well past 15-min grace
-        deadline = (T0 - timedelta(hours=1)).isoformat()
+        deadline = (T0 - timedelta(hours=1))
         row = await _insert_escrow(
             deadline_db, "payment_pending",
             payment_deadline=deadline,
@@ -208,7 +208,7 @@ class TestShippingDeadlineDisputeAndStrike:
         await _insert_user(deadline_db, seller_id)
 
         # Deadline 20 min ago — past 15-min grace
-        deadline = (T0 - timedelta(minutes=20)).isoformat()
+        deadline = (T0 - timedelta(minutes=20))
         row = await _insert_escrow(
             deadline_db, "shipping_requested",
             shipping_deadline=deadline,
@@ -254,7 +254,7 @@ class TestInspectionDeadlineReleaseAndPayout:
         """Past inspection_deadline + grace → RELEASED + seller payout."""
         monitor, mock_tasks = _get_monitor()
 
-        deadline = (T0 - timedelta(minutes=20)).isoformat()
+        deadline = (T0 - timedelta(minutes=20))
         row = await _insert_escrow(
             deadline_db, "inspection_period",
             inspection_deadline=deadline,
@@ -292,7 +292,7 @@ class TestUnderReview72hNotifiesMediator:
         """Under review for 73h → mediator SLA breach dispatched."""
         monitor, mock_tasks = _get_monitor()
 
-        entered = (T0 - timedelta(hours=73)).isoformat()
+        entered = (T0 - timedelta(hours=73))
         row = await _insert_escrow(
             deadline_db, "under_review",
             last_transition_at=entered,
@@ -328,7 +328,7 @@ class TestUnderReview120hProposesSplit:
         monitor, mock_tasks = _get_monitor()
 
         mediator_id = str(uuid4())
-        entered = (T0 - timedelta(hours=121)).isoformat()
+        entered = (T0 - timedelta(hours=121))
         row = await _insert_escrow(
             deadline_db, "under_review",
             last_transition_at=entered,
@@ -365,7 +365,7 @@ class TestUnderReview144hAutoSplitExecutes:
         """Under review for 145h → RESOLVED_SPLIT + split payout."""
         monitor, mock_tasks = _get_monitor()
 
-        entered = (T0 - timedelta(hours=145)).isoformat()
+        entered = (T0 - timedelta(hours=145))
         row = await _insert_escrow(
             deadline_db, "under_review",
             last_transition_at=entered,
@@ -406,19 +406,19 @@ class TestGracePeriodRespected:
         monitor, _ = _get_monitor()
 
         # Payment deadline 10 min ago — within grace
-        payment_dl = (T0 - timedelta(minutes=10)).isoformat()
+        payment_dl = (T0 - timedelta(minutes=10))
         row_p = await _insert_escrow(
             deadline_db, "payment_pending", payment_deadline=payment_dl,
         )
 
         # Shipping deadline 10 min ago — within grace
-        shipping_dl = (T0 - timedelta(minutes=10)).isoformat()
+        shipping_dl = (T0 - timedelta(minutes=10))
         row_s = await _insert_escrow(
             deadline_db, "shipping_requested", shipping_deadline=shipping_dl,
         )
 
         # Inspection deadline 10 min ago — within grace
-        inspection_dl = (T0 - timedelta(minutes=10)).isoformat()
+        inspection_dl = (T0 - timedelta(minutes=10))
         row_i = await _insert_escrow(
             deadline_db, "inspection_period", inspection_deadline=inspection_dl,
         )
@@ -455,7 +455,7 @@ class TestIdempotencyRepeatedRun:
         """Running check twice → second run finds terminal state, no extra events."""
         monitor, mock_tasks = _get_monitor()
 
-        deadline = (T0 - timedelta(hours=1)).isoformat()
+        deadline = (T0 - timedelta(hours=1))
         row = await _insert_escrow(
             deadline_db, "payment_pending", payment_deadline=deadline,
         )

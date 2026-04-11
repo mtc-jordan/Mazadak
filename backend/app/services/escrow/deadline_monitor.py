@@ -37,7 +37,7 @@ async def check_escrow_deadlines(db: AsyncSession) -> None:
     """
     now = datetime.utcnow()
     grace = GRACE
-    cutoff = (now - grace).isoformat()
+    cutoff = now - grace
 
     payment_cancelled = 0
     shipping_disputed = 0
@@ -59,7 +59,7 @@ async def check_escrow_deadlines(db: AsyncSession) -> None:
             await transition_escrow(
                 escrow.id, "cancelled", None, "system",
                 "deadline.payment_expired",
-                {"deadline": escrow.payment_deadline},
+                {"deadline": str(escrow.payment_deadline)},
                 db,
             )
             # Void Checkout.com payment intent if exists
@@ -171,13 +171,20 @@ async def check_escrow_deadlines(db: AsyncSession) -> None:
 
 # ── Datetime parsing ─────────────────────────────────────────────
 
-def _parse_datetime(value: str | None) -> datetime | None:
-    """Parse ISO-8601 string to naive UTC datetime for comparison."""
-    if not value:
+def _parse_datetime(value: datetime | str | None) -> datetime | None:
+    """Normalize a datetime or ISO-8601 string to naive UTC datetime."""
+    if value is None:
         return None
+    # Handle datetime objects (duck-typing to avoid issues when
+    # the module-level 'datetime' name is patched in tests).
+    if hasattr(value, "tzinfo"):
+        dt = value
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
+        return dt
     try:
-        dt = datetime.fromisoformat(value)
-        # Strip tzinfo for utcnow() comparison
+        from datetime import datetime as _dt
+        dt = _dt.fromisoformat(value)
         if dt.tzinfo is not None:
             dt = dt.replace(tzinfo=None)
         return dt

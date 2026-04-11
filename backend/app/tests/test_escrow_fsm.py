@@ -385,7 +385,7 @@ class TestDeadlinesSetCorrectlyPerState:
             "system", "system.funds_confirmed", {}, escrow_db,
         )
         assert escrow.shipping_deadline is not None
-        deadline = datetime.fromisoformat(escrow.shipping_deadline)
+        deadline = escrow.shipping_deadline
         # Should be ~48 hours from now (with some tolerance)
         now = datetime.utcnow()
         assert timedelta(hours=47) < (deadline - now) < timedelta(hours=49)
@@ -400,7 +400,7 @@ class TestDeadlinesSetCorrectlyPerState:
             "system", "delivery.confirmed", {}, escrow_db,
         )
         assert escrow.inspection_deadline is not None
-        deadline = datetime.fromisoformat(escrow.inspection_deadline)
+        deadline = escrow.inspection_deadline
         now = datetime.utcnow()
         assert timedelta(hours=71) < (deadline - now) < timedelta(hours=73)
 
@@ -411,7 +411,7 @@ class TestDeadlinesSetCorrectlyPerState:
             "admin", "admin.assign_mediator", {}, escrow_db,
         )
         assert escrow.release_deadline is not None
-        deadline = datetime.fromisoformat(escrow.release_deadline)
+        deadline = escrow.release_deadline
         now = datetime.utcnow()
         assert timedelta(hours=143) < (deadline - now) < timedelta(hours=145)
 

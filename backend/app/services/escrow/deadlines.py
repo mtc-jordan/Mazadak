@@ -83,7 +83,7 @@ async def _check_payment_deadlines(
             await transition_escrow(
                 escrow.id, "cancelled", None, ActorType.SYSTEM.value,
                 "system.payment_deadline_expired",
-                {"deadline": escrow.payment_deadline},
+                {"deadline": str(escrow.payment_deadline)},
                 db,
             )
             _void_payment_intent(escrow)
@@ -109,7 +109,7 @@ async def _check_shipping_deadlines(
                 escrow.id, "disputed", None, ActorType.SYSTEM.value,
                 "system.seller_no_show_48h",
                 {
-                    "deadline": escrow.shipping_deadline,
+                    "deadline": str(escrow.shipping_deadline),
                     "seller_id": escrow.seller_id,
                 },
                 db,
@@ -139,7 +139,7 @@ async def _check_inspection_deadlines(
             await transition_escrow(
                 escrow.id, "released", None, ActorType.SYSTEM.value,
                 "system.inspection_auto_release",
-                {"deadline": escrow.inspection_deadline},
+                {"deadline": str(escrow.inspection_deadline)},
                 db,
             )
             results["inspection_expired"] += 1
@@ -232,12 +232,17 @@ async def _query_state(db: AsyncSession, state: EscrowState) -> list[Escrow]:
     return list(result.scalars().all())
 
 
-def _parse_deadline(value: str | None) -> datetime | None:
-    """Parse an ISO-8601 deadline string to an aware UTC datetime."""
-    if not value:
+def _parse_deadline(value: datetime | str | None) -> datetime | None:
+    """Normalize a deadline value to an aware UTC datetime."""
+    if value is None:
         return None
+    # Check for datetime objects using duck-typing (avoids issues when
+    # the module-level 'datetime' name is patched in tests).
+    if hasattr(value, "tzinfo"):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     try:
-        dt = datetime.fromisoformat(value)
+        from datetime import datetime as _dt
+        dt = _dt.fromisoformat(value)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt

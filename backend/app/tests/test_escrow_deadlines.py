@@ -134,7 +134,7 @@ async def _insert_event(
     from_state: str,
     to_state: str,
     trigger: str,
-    created_at: str | None = None,
+    created_at: datetime | None = None,
 ) -> None:
     """Insert an escrow event with a controlled created_at timestamp."""
     ev = EscrowEvent(
@@ -191,14 +191,14 @@ class TestPaymentDeadline:
     async def test_expired_payment_cancelled(self, escrow_db):
         """Escrow with expired payment_deadline is auto-cancelled."""
         dl, _ = _get_deadlines_module()
-        past = (T0 - timedelta(hours=1)).isoformat()
+        past = (T0 - timedelta(hours=1))
         row = await _insert_escrow(
             escrow_db, "payment_pending", payment_deadline=past,
         )
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["payment_expired"] == 1
@@ -209,14 +209,14 @@ class TestPaymentDeadline:
     async def test_unexpired_payment_untouched(self, escrow_db):
         """Escrow with future payment_deadline is not touched."""
         dl, _ = _get_deadlines_module()
-        future = (T0 + timedelta(hours=2)).isoformat()
+        future = (T0 + timedelta(hours=2))
         row = await _insert_escrow(
             escrow_db, "payment_pending", payment_deadline=future,
         )
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["payment_expired"] == 0
@@ -231,7 +231,7 @@ class TestPaymentDeadline:
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["payment_expired"] == 0
@@ -240,7 +240,7 @@ class TestPaymentDeadline:
     async def test_payment_void_dispatched(self, escrow_db):
         """Voiding Checkout.com intent is dispatched after cancellation."""
         dl, mock_tasks = _get_deadlines_module()
-        past = (T0 - timedelta(hours=1)).isoformat()
+        past = (T0 - timedelta(hours=1))
         row = await _insert_escrow(
             escrow_db, "payment_pending",
             payment_deadline=past, payment_intent_id="pay_abc123",
@@ -252,7 +252,7 @@ class TestPaymentDeadline:
         }):
             with patch.object(dl, "datetime") as mock_dt:
                 mock_dt.now.return_value = T0
-                mock_dt.fromisoformat = datetime.fromisoformat
+    
                 await dl.check_escrow_deadlines(escrow_db)
 
         mock_tasks.void_payment_intent.delay.assert_called_once_with("pay_abc123")
@@ -260,14 +260,14 @@ class TestPaymentDeadline:
     @pytest.mark.asyncio
     async def test_payment_event_log_written(self, escrow_db):
         dl, _ = _get_deadlines_module()
-        past = (T0 - timedelta(hours=1)).isoformat()
+        past = (T0 - timedelta(hours=1))
         row = await _insert_escrow(
             escrow_db, "payment_pending", payment_deadline=past,
         )
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             await dl.check_escrow_deadlines(escrow_db)
 
         events = await _get_events(escrow_db, row["id"])
@@ -289,7 +289,7 @@ class TestShippingDeadline:
         seller_id = str(uuid4())
         await _insert_user(escrow_db, seller_id)
         # Deadline was 20 min ago — past the 15-min grace
-        past = (T0 - timedelta(minutes=20)).isoformat()
+        past = (T0 - timedelta(minutes=20))
         row = await _insert_escrow(
             escrow_db, "shipping_requested",
             shipping_deadline=past, seller_id=seller_id,
@@ -297,7 +297,7 @@ class TestShippingDeadline:
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["shipping_expired"] == 1
@@ -309,14 +309,14 @@ class TestShippingDeadline:
         """Deadline expired but still within 15-min grace → not processed."""
         dl, _ = _get_deadlines_module()
         # Deadline was 10 min ago — within 15-min grace
-        past = (T0 - timedelta(minutes=10)).isoformat()
+        past = (T0 - timedelta(minutes=10))
         await _insert_escrow(
             escrow_db, "shipping_requested", shipping_deadline=past,
         )
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["shipping_expired"] == 0
@@ -329,7 +329,7 @@ class TestShippingDeadline:
         dl, _ = _get_deadlines_module()
         seller_id = str(uuid4())
         await _insert_user(escrow_db, seller_id)
-        past = (T0 - timedelta(hours=1)).isoformat()
+        past = (T0 - timedelta(hours=1))
         await _insert_escrow(
             escrow_db, "shipping_requested",
             shipping_deadline=past, seller_id=seller_id,
@@ -337,7 +337,7 @@ class TestShippingDeadline:
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             await dl.check_escrow_deadlines(escrow_db)
 
         result = await escrow_db.execute(select(User).where(User.id == seller_id))
@@ -349,7 +349,7 @@ class TestShippingDeadline:
         dl, _ = _get_deadlines_module()
         seller_id = str(uuid4())
         await _insert_user(escrow_db, seller_id)
-        past = (T0 - timedelta(hours=1)).isoformat()
+        past = (T0 - timedelta(hours=1))
         row = await _insert_escrow(
             escrow_db, "shipping_requested",
             shipping_deadline=past, seller_id=seller_id,
@@ -357,7 +357,7 @@ class TestShippingDeadline:
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             await dl.check_escrow_deadlines(escrow_db)
 
         events = await _get_events(escrow_db, row["id"])
@@ -374,14 +374,14 @@ class TestInspectionDeadline:
     async def test_expired_inspection_released(self, escrow_db):
         """Past inspection_deadline + 15 min grace → RELEASED."""
         dl, _ = _get_deadlines_module()
-        past = (T0 - timedelta(minutes=20)).isoformat()
+        past = (T0 - timedelta(minutes=20))
         row = await _insert_escrow(
             escrow_db, "inspection_period", inspection_deadline=past,
         )
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["inspection_expired"] == 1
@@ -391,14 +391,14 @@ class TestInspectionDeadline:
     @pytest.mark.asyncio
     async def test_inspection_within_grace_untouched(self, escrow_db):
         dl, _ = _get_deadlines_module()
-        past = (T0 - timedelta(minutes=10)).isoformat()
+        past = (T0 - timedelta(minutes=10))
         await _insert_escrow(
             escrow_db, "inspection_period", inspection_deadline=past,
         )
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["inspection_expired"] == 0
@@ -406,14 +406,14 @@ class TestInspectionDeadline:
     @pytest.mark.asyncio
     async def test_inspection_event_trigger(self, escrow_db):
         dl, _ = _get_deadlines_module()
-        past = (T0 - timedelta(hours=1)).isoformat()
+        past = (T0 - timedelta(hours=1))
         row = await _insert_escrow(
             escrow_db, "inspection_period", inspection_deadline=past,
         )
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             await dl.check_escrow_deadlines(escrow_db)
 
         events = await _get_events(escrow_db, row["id"])
@@ -435,12 +435,12 @@ class TestMediatorSLA72h:
         row = await _insert_escrow(escrow_db, "under_review")
         await _insert_event(
             escrow_db, row["id"], "disputed", "under_review",
-            "mediator.assigned", created_at=entered.isoformat(),
+            "mediator.assigned", created_at=entered,
         )
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["mediator_escalated"] == 1
@@ -456,12 +456,12 @@ class TestMediatorSLA72h:
         row = await _insert_escrow(escrow_db, "under_review")
         await _insert_event(
             escrow_db, row["id"], "disputed", "under_review",
-            "mediator.assigned", created_at=entered.isoformat(),
+            "mediator.assigned", created_at=entered,
         )
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["mediator_escalated"] == 0
@@ -474,7 +474,7 @@ class TestMediatorSLA72h:
         row = await _insert_escrow(escrow_db, "under_review")
         await _insert_event(
             escrow_db, row["id"], "disputed", "under_review",
-            "mediator.assigned", created_at=entered.isoformat(),
+            "mediator.assigned", created_at=entered,
         )
         # Already escalated
         await _insert_event(
@@ -484,7 +484,7 @@ class TestMediatorSLA72h:
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["mediator_escalated"] == 0
@@ -504,12 +504,12 @@ class TestMediatorSLA120h:
         row = await _insert_escrow(escrow_db, "under_review")
         await _insert_event(
             escrow_db, row["id"], "disputed", "under_review",
-            "mediator.assigned", created_at=entered.isoformat(),
+            "mediator.assigned", created_at=entered,
         )
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["mediator_proposed"] == 1
@@ -528,7 +528,7 @@ class TestMediatorSLA120h:
         row = await _insert_escrow(escrow_db, "under_review")
         await _insert_event(
             escrow_db, row["id"], "disputed", "under_review",
-            "mediator.assigned", created_at=entered.isoformat(),
+            "mediator.assigned", created_at=entered,
         )
         await _insert_event(
             escrow_db, row["id"], "under_review", "under_review",
@@ -537,7 +537,7 @@ class TestMediatorSLA120h:
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["mediator_proposed"] == 0
@@ -557,12 +557,12 @@ class TestMediatorSLA144h:
         row = await _insert_escrow(escrow_db, "under_review", amount=1000.0)
         await _insert_event(
             escrow_db, row["id"], "disputed", "under_review",
-            "mediator.assigned", created_at=entered.isoformat(),
+            "mediator.assigned", created_at=entered,
         )
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["mediator_auto_executed"] == 1
@@ -577,12 +577,12 @@ class TestMediatorSLA144h:
         row = await _insert_escrow(escrow_db, "under_review")
         await _insert_event(
             escrow_db, row["id"], "disputed", "under_review",
-            "mediator.assigned", created_at=entered.isoformat(),
+            "mediator.assigned", created_at=entered,
         )
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             await dl.check_escrow_deadlines(escrow_db)
 
         events = await _get_events(escrow_db, row["id"])
@@ -598,12 +598,12 @@ class TestMediatorSLA144h:
         row = await _insert_escrow(escrow_db, "resolved_split")
         await _insert_event(
             escrow_db, row["id"], "disputed", "under_review",
-            "mediator.assigned", created_at=entered.isoformat(),
+            "mediator.assigned", created_at=entered,
         )
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         # Not counted — not in under_review state anymore
@@ -623,10 +623,9 @@ class TestMultiEscrowScan:
         seller_id = str(uuid4())
         await _insert_user(escrow_db, seller_id)
 
-        past_payment = (T0 - timedelta(hours=2)).isoformat()
-        past_shipping = (T0 - timedelta(hours=1)).isoformat()
-        past_inspection = (T0 - timedelta(hours=1)).isoformat()
-
+        past_payment = (T0 - timedelta(hours=2))
+        past_shipping = (T0 - timedelta(hours=1))
+        past_inspection = (T0 - timedelta(hours=1))
         await _insert_escrow(
             escrow_db, "payment_pending", payment_deadline=past_payment,
         )
@@ -641,7 +640,7 @@ class TestMultiEscrowScan:
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert results["payment_expired"] == 1
@@ -660,7 +659,7 @@ class TestMultiEscrowScan:
 
         with patch.object(dl, "datetime") as mock_dt:
             mock_dt.now.return_value = T0
-            mock_dt.fromisoformat = datetime.fromisoformat
+
             results = await dl.check_escrow_deadlines(escrow_db)
 
         assert sum(results.values()) == 0

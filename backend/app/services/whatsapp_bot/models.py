@@ -8,9 +8,9 @@ BotConversation tracks multi-turn state for disambiguation flows.
 from __future__ import annotations
 
 import enum
-import uuid
 
-from sqlalchemy import ForeignKey, Index, String, Text
+from sqlalchemy import ForeignKey, Index, String, Text, text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TimestampMixin
@@ -40,13 +40,14 @@ class WaAccount(Base, TimestampMixin):
     __tablename__ = "wa_accounts"
 
     id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4()),
+        UUID(as_uuid=False), primary_key=True,
+        server_default=text("gen_random_uuid()"),
     )
     wa_phone: Mapped[str] = mapped_column(
         String(20), unique=True, index=True, comment="E.164 without +",
     )
     user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id"), index=True,
+        UUID(as_uuid=False), ForeignKey("users.id"), index=True,
     )
     is_active: Mapped[bool] = mapped_column(default=True)
 
@@ -64,13 +65,16 @@ class BotConversation(Base, TimestampMixin):
     __tablename__ = "bot_conversations"
 
     id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4()),
+        UUID(as_uuid=False), primary_key=True,
+        server_default=text("gen_random_uuid()"),
     )
     wa_phone: Mapped[str] = mapped_column(String(20), index=True)
     state: Mapped[ConversationState] = mapped_column(
-        default=ConversationState.IDLE,
+        String(50), default=ConversationState.IDLE,
     )
-    intent: Mapped[BotIntent] = mapped_column(default=BotIntent.UNKNOWN)
+    intent: Mapped[BotIntent] = mapped_column(
+        String(20), default=BotIntent.UNKNOWN,
+    )
     # Stash partial context between turns
     context_auction_ids: Mapped[str | None] = mapped_column(
         Text, default=None, comment="JSON array of candidate auction IDs",

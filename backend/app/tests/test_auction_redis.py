@@ -44,8 +44,8 @@ def _make_auction(**overrides) -> Auction:
         id=str(uuid4()),
         listing_id=str(uuid4()),
         status=AuctionStatus.SCHEDULED.value,
-        starts_at=now.isoformat(),
-        ends_at=(now + timedelta(hours=2)).isoformat(),
+        starts_at=now,
+        ends_at=now + timedelta(hours=2),
         current_price=10000,
         min_increment=2500,
         bid_count=0,
@@ -123,8 +123,8 @@ class TestInitializeAuctionSetsAllKeys:
         auction = _make_auction(
             listing_id=listing.id,
             status=AuctionStatus.SCHEDULED.value,
-            starts_at=(now - timedelta(minutes=1)).isoformat(),
-            ends_at=(now + timedelta(hours=2)).isoformat(),
+            starts_at=(now - timedelta(minutes=1)),
+            ends_at=(now + timedelta(hours=2)),
             current_price=15000,
         )
         db_session.add(auction)
@@ -180,8 +180,8 @@ class TestInitializeAuctionIdempotent:
         auction = _make_auction(
             listing_id=listing.id,
             status=AuctionStatus.SCHEDULED.value,
-            starts_at=(now - timedelta(minutes=1)).isoformat(),
-            ends_at=(now + timedelta(hours=2)).isoformat(),
+            starts_at=(now - timedelta(minutes=1)),
+            ends_at=(now + timedelta(hours=2)),
         )
         db_session.add(auction)
         await db_session.commit()
@@ -213,8 +213,8 @@ class TestInitializeAuctionPastEndsAt:
         auction = _make_auction(
             listing_id=listing.id,
             status=AuctionStatus.SCHEDULED.value,
-            starts_at=(now - timedelta(hours=3)).isoformat(),
-            ends_at=(now - timedelta(hours=1)).isoformat(),
+            starts_at=(now - timedelta(hours=3)),
+            ends_at=(now - timedelta(hours=1)),
         )
         db_session.add(auction)
         await db_session.commit()
@@ -390,7 +390,7 @@ class TestStaleAuctionFailsafe:
         auction = _make_auction(
             listing_id=listing.id,
             status=AuctionStatus.ACTIVE.value,
-            ends_at=(now - timedelta(minutes=10)).isoformat(),
+            ends_at=(now - timedelta(minutes=10)),
         )
         db_session.add(auction)
         await db_session.commit()
