@@ -9,7 +9,7 @@ Usage in dependencies:
 
 from datetime import datetime
 
-from sqlalchemy import MetaData, func
+from sqlalchemy import DateTime, MetaData, func
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -57,10 +57,12 @@ class TimestampMixin:
     """created_at / updated_at columns for any model."""
 
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,

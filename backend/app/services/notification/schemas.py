@@ -1,18 +1,21 @@
 """Notification schemas."""
 
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
 class NotificationOut(BaseModel):
     id: str
     user_id: str
-    channel: str
-    title_ar: str
-    title_en: str
-    body_ar: str
-    body_en: str
+    event_type: str
+    title_ar: str | None = None
+    title_en: str | None = None
+    body_ar: str | None = None
+    body_en: str | None = None
     is_read: bool
-    sent_at: str | None = None
+    channels_sent: list[str] = []
+    created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

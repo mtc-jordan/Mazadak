@@ -1,5 +1,7 @@
 """Auction request/response schemas — SDD §5.4."""
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -14,8 +16,8 @@ class AuctionOut(BaseModel):
     id: str
     listing_id: str
     status: str
-    starts_at: str
-    ends_at: str
+    starts_at: datetime
+    ends_at: datetime
     current_price: float
     min_increment: float
     bid_count: int
@@ -38,7 +40,7 @@ class BidOut(BaseModel):
     amount: float
     currency: str
     is_proxy: bool
-    created_at: str
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -69,7 +71,7 @@ class MyAuctionItem(BaseModel):
     currency: str = "JOD"
     bid_count: int = 0
     status: str
-    ends_at: str | None = None
+    ends_at: datetime | None = None
     winner_name: str | None = None
     is_live: bool = False
 

@@ -1,5 +1,7 @@
 """Escrow request/response schemas — SDD §5.5."""
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -16,9 +18,9 @@ class EscrowOut(BaseModel):
     payment_link: str | None = None
     tracking_number: str | None = None
     carrier: str | None = None
-    payment_deadline: str | None = None
-    shipping_deadline: str | None = None
-    inspection_deadline: str | None = None
+    payment_deadline: datetime | None = None
+    shipping_deadline: datetime | None = None
+    inspection_deadline: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -40,7 +42,7 @@ class FileDisputeRequest(BaseModel):
 class InitiatePaymentResponse(BaseModel):
     escrow_id: str
     payment_link: str
-    expires_at: str | None = None
+    expires_at: datetime | None = None
 
 
 class EscrowEventOut(BaseModel):
@@ -51,6 +53,6 @@ class EscrowEventOut(BaseModel):
     actor_id: str | None = None
     actor_type: str
     trigger: str
-    created_at: str
+    created_at: datetime
 
     model_config = {"from_attributes": True}

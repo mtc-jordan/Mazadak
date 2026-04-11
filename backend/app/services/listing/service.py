@@ -207,9 +207,11 @@ async def get_listings(
     limit = min(limit, 50)
     query = select(Listing)
 
-    # Filters
+    # Filters — default to active-only for public browsing
     if status:
         query = query.where(Listing.status == status)
+    else:
+        query = query.where(Listing.status == ListingStatus.ACTIVE.value)
     if category_id is not None:
         query = query.where(Listing.category_id == category_id)
     if condition:

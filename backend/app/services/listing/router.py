@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from app.core.database import get_db
 from app.core.types import UUIDPath
-from app.services.auth.dependencies import require_kyc
+from app.services.auth.dependencies import require_kyc, require_seller
 from app.services.auth.models import User
 from app.services.listing import schemas, service
 from app.services.listing.dependencies import get_listing_or_404, get_own_listing
@@ -83,10 +83,10 @@ def _listing_to_response(
 @router.post("/", response_model=schemas.ListingResponse, status_code=201)
 async def create_listing(
     body: schemas.CreateListingRequest,
-    user: User = Depends(require_kyc),
+    user: User = Depends(require_seller),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a draft listing. Requires KYC. Free tier capped at 5."""
+    """Create a draft listing. Requires seller role + KYC. Free tier capped at 5."""
     try:
         listing = await service.create_listing(
             user.id, body, db,

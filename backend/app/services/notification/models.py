@@ -37,10 +37,10 @@ class Notification(Base):
     title_ar: Mapped[str | None] = mapped_column(String(200))
     body_en: Mapped[str | None] = mapped_column(Text)
     body_ar: Mapped[str | None] = mapped_column(Text)
-    data: Mapped[dict] = mapped_column(JSONB, server_default="'{}'", nullable=False)
+    data: Mapped[dict] = mapped_column(JSONB, server_default="{}", nullable=False)
     is_read: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    channels_sent: Mapped[list] = mapped_column(JSONB, server_default="'[]'", nullable=False)
+    channels_sent: Mapped[list] = mapped_column(JSONB, server_default="[]", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),
