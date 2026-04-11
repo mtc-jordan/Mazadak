@@ -308,21 +308,6 @@ final routerProvider = Provider<GoRouter>((ref) {
   );
 });
 
-// ── Placeholder widgets (replaced by actual screens later) ──────
-
-class _PlaceholderScreen extends StatelessWidget {
-  const _PlaceholderScreen(this.title);
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(title)),
-      body: Center(child: Text(title, style: Theme.of(context).textTheme.headlineMedium)),
-    );
-  }
-}
-
 class _ShellScaffold extends StatelessWidget {
   const _ShellScaffold({required this.child});
   final Widget child;
