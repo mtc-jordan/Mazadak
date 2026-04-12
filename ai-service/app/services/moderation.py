@@ -2,6 +2,7 @@
 
 Arabic keyword blocklist + pattern matching for prohibited content.
 Returns a score 0-100 where lower is safer.
+Flag descriptions are bilingual (Arabic and English).
 """
 
 from __future__ import annotations
@@ -54,6 +55,45 @@ WEIGHT_PROHIBITED = 35
 WEIGHT_CONTACT = 15
 WEIGHT_SOCIAL = 10
 
+# Bilingual flag descriptions
+FLAG_DESCRIPTIONS: dict[str, dict[str, str]] = {
+    "weapons": {
+        "en": "Weapons or weapon-related items are prohibited",
+        "ar": "الأسلحة أو المواد المتعلقة بالأسلحة محظورة",
+    },
+    "drugs": {
+        "en": "Drugs or controlled substances are prohibited",
+        "ar": "المخدرات أو المواد الخاضعة للرقابة محظورة",
+    },
+    "counterfeit": {
+        "en": "Counterfeit or replica items are not allowed",
+        "ar": "المنتجات المقلدة أو المزيفة غير مسموح بها",
+    },
+    "prohibited": {
+        "en": "This item falls under prohibited goods",
+        "ar": "هذا المنتج يندرج ضمن السلع المحظورة",
+    },
+    "phone_number": {
+        "en": "Sharing contact phone numbers is not allowed",
+        "ar": "مشاركة أرقام الهاتف غير مسموح بها",
+    },
+    "email": {
+        "en": "Sharing email addresses is not allowed",
+        "ar": "مشاركة عناوين البريد الإلكتروني غير مسموح بها",
+    },
+    "social_media": {
+        "en": "Sharing social media accounts is not allowed",
+        "ar": "مشاركة حسابات التواصل الاجتماعي غير مسموح بها",
+    },
+}
+
+
+def _bilingual_flag(category: str, keyword: str | None = None) -> str:
+    """Build a bilingual flag string like 'weapons_keyword:سلاح | Weapons ... | الأسلحة ...'"""
+    desc = FLAG_DESCRIPTIONS.get(category, {"en": category, "ar": category})
+    prefix = f"{category}_keyword:{keyword}" if keyword else f"contact_info:{category}"
+    return f"{prefix} | {desc['en']} | {desc['ar']}"
+
 
 async def moderate_content(
     listing_id: str,
@@ -72,42 +112,42 @@ async def moderate_content(
     # Check weapons
     for term in WEAPONS_AR:
         if term in text:
-            flags.append(f"weapons_keyword:{term}")
+            flags.append(_bilingual_flag("weapons", term))
             score += WEIGHT_WEAPONS
             break  # One hit per category is enough
 
     # Check drugs
     for term in DRUGS_AR:
         if term in text:
-            flags.append(f"drugs_keyword:{term}")
+            flags.append(_bilingual_flag("drugs", term))
             score += WEIGHT_DRUGS
             break
 
     # Check counterfeit
     for term in COUNTERFEIT_AR:
         if term in text:
-            flags.append(f"counterfeit_keyword:{term}")
+            flags.append(_bilingual_flag("counterfeit", term))
             score += WEIGHT_COUNTERFEIT
             break
 
     # Check prohibited
     for term in PROHIBITED_AR:
         if term in text:
-            flags.append(f"prohibited_keyword:{term}")
+            flags.append(_bilingual_flag("prohibited", term))
             score += WEIGHT_PROHIBITED
             break
 
     # Check contact info
     if PHONE_PATTERN.search(text):
-        flags.append("contact_info:phone_number")
+        flags.append(_bilingual_flag("phone_number"))
         score += WEIGHT_CONTACT
 
     if EMAIL_PATTERN.search(text):
-        flags.append("contact_info:email")
+        flags.append(_bilingual_flag("email"))
         score += WEIGHT_CONTACT
 
     if SOCIAL_PATTERNS.search(text):
-        flags.append("contact_info:social_media")
+        flags.append(_bilingual_flag("social_media"))
         score += WEIGHT_SOCIAL
 
     # Clamp to 0-100

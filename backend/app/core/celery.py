@@ -55,6 +55,10 @@ celery_app.conf.update(
             "task": "app.tasks.escrow.recalculate_all_ats",
             "schedule": crontab(hour=23, minute=0, day_of_week=6),  # Sunday 2am Amman (UTC+3) = Saturday 23:00 UTC
         },
+        "flush-analytics-events": {
+            "task": "app.tasks.analytics.flush_analytics",
+            "schedule": 30.0,  # 30 seconds — batch insert to ClickHouse
+        },
     },
 )
 

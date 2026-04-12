@@ -33,6 +33,9 @@ CATEGORIES: list[dict[str, Any]] = [
     {"id": 7, "en": "Home & Garden", "ar": "منزل وحديقة"},
     {"id": 8, "en": "Sports & Outdoors", "ar": "رياضة ونشاطات خارجية"},
     {"id": 9, "en": "Other", "ar": "أخرى"},
+    {"id": 10, "en": "Antiques", "ar": "تحف وآثار"},
+    {"id": 11, "en": "Books & Media", "ar": "كتب ووسائط"},
+    {"id": 12, "en": "Industrial Equipment", "ar": "معدات صناعية"},
 ]
 
 CATEGORY_LABELS = [c["en"] for c in CATEGORIES]

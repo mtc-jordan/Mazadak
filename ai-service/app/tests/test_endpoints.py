@@ -174,7 +174,25 @@ class TestModeration:
             description_ar="تواصل معي على 0791234567",
             image_urls=[],
         )
-        assert any("contact_info:phone_number" in f for f in result.flags)
+        assert any("phone_number" in f for f in result.flags)
+
+    @pytest.mark.asyncio
+    async def test_moderate_bilingual_flags(self):
+        """Flags include both Arabic and English descriptions."""
+        from app.services.moderation import moderate_content
+
+        result = await moderate_content(
+            listing_id="lst-005",
+            title_ar="تقليد ساعة رولكس",
+            description_ar="ريبليكا درجة أولى تواصل 0791234567",
+            image_urls=[],
+        )
+        assert result.score >= 25
+        assert result.auto_approve is False
+        # Bilingual flags contain both ' | ' separators
+        assert any("|" in f for f in result.flags)
+        # Contains Arabic description
+        assert any("غير مسموح" in f or "محظورة" in f for f in result.flags)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -231,6 +249,33 @@ class TestPriceOracle:
         )
         assert result.price_low == result_other.price_low
         assert result.price_high == result_other.price_high
+
+    @pytest.mark.asyncio
+    async def test_price_oracle_new_categories(self):
+        """New categories 10-12 return valid estimates."""
+        from app.services.price_oracle import _compute_estimate
+
+        for cat_id in (10, 11, 12):
+            result = _compute_estimate(
+                category_id=cat_id,
+                condition="good",
+                brand=None,
+            )
+            assert result.price_low > 0
+            assert result.price_high > result.price_low
+
+    @pytest.mark.asyncio
+    async def test_price_oracle_confidence_logic(self):
+        """Confidence levels follow the spec rules."""
+        from app.services.price_oracle import _compute_confidence
+
+        assert _compute_confidence(0, None) == "none"
+        assert _compute_confidence(3, 20) == "low"
+        assert _compute_confidence(5, 60) == "medium"
+        assert _compute_confidence(20, 30) == "high"
+        assert _compute_confidence(25, 10) == "high"
+        assert _compute_confidence(20, 60) == "medium"  # >=20 but >30d
+        assert _compute_confidence(4, 10) == "low"      # <5
 
     @pytest.mark.asyncio
     async def test_price_oracle_endpoint(self):
