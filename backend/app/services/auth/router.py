@@ -206,6 +206,42 @@ async def get_me(
     return schemas.UserResponse.model_validate(user)
 
 
+# ── PUT /auth/me — Update profile (FR-AUTH-009) ───────────────
+
+@router.put(
+    "/me",
+    response_model=schemas.UpdateProfileResponse,
+)
+async def update_me(
+    body: schemas.UpdateProfileRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the authenticated user's profile.
+
+    FR-AUTH-009: name, email, address, language preference.
+    """
+    if body.full_name is not None:
+        user.full_name = body.full_name
+    if body.full_name_ar is not None:
+        user.full_name_ar = body.full_name_ar
+    if body.email is not None:
+        user.email = body.email
+    if body.preferred_language is not None:
+        user.preferred_language = body.preferred_language
+    if body.address_city is not None:
+        user.address_city = body.address_city
+    if body.address_country is not None:
+        user.address_country = body.address_country
+
+    await db.commit()
+    await db.refresh(user)
+
+    return schemas.UpdateProfileResponse(
+        user=schemas.UserResponse.model_validate(user),
+    )
+
+
 # ── GET /auth/kyc/status ──────────────────────────────────────
 
 @router.get(
@@ -369,3 +405,93 @@ async def remove_device_token(
         await db.commit()
 
     return schemas.RegisterDeviceTokenResponse()
+
+
+# ── POST /auth/change-phone — FR-AUTH-010 ────────────────────
+
+@router.post("/change-phone/request")
+async def change_phone_request(
+    body: schemas.ChangePhoneRequest,
+    user: User = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db),
+):
+    """Step 1: Request phone number change — sends OTP to new number.
+
+    Checks that the new number isn't already registered.
+    OTP is stored with a special prefix to distinguish from login OTPs.
+    """
+    from sqlalchemy import select
+
+    # Check new phone isn't already taken
+    existing = await db.execute(
+        select(User).where(User.phone == body.new_phone)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "PHONE_ALREADY_REGISTERED",
+                "message_en": "This phone number is already registered",
+                "message_ar": "رقم الهاتف مسجل مسبقاً",
+            },
+        )
+
+    # Send OTP to new phone (reuse existing OTP logic)
+    success, _error_code, error_detail = await service.send_otp(
+        body.new_phone, redis, purpose="change_phone"
+    )
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=error_detail,
+        )
+
+    return {
+        "success": True,
+        "message_en": "OTP sent to new phone number",
+        "message_ar": "تم إرسال رمز التحقق إلى الرقم الجديد",
+    }
+
+
+@router.post("/change-phone/verify")
+async def change_phone_verify(
+    body: schemas.ChangePhoneVerifyRequest,
+    user: User = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db),
+):
+    """Step 2: Verify OTP on new phone and update the user's phone number.
+
+    After successful verification, all existing sessions are revoked
+    and new tokens are issued.
+    """
+    valid, error_code, error_detail = await service.verify_otp(
+        body.new_phone, body.otp, redis, purpose="change_phone"
+    )
+    if not valid:
+        status_code = (
+            status.HTTP_429_TOO_MANY_REQUESTS
+            if error_code == "OTP_LOCKED_OUT"
+            else status.HTTP_401_UNAUTHORIZED
+        )
+        raise HTTPException(status_code=status_code, detail=error_detail)
+
+    # Update phone number
+    old_phone = user.phone
+    user.phone = body.new_phone
+    await db.commit()
+    await db.refresh(user)
+
+    # Revoke all existing sessions (force re-login on other devices)
+    await service.revoke_all_user_tokens(user.id, db)
+
+    # Issue new tokens
+    access_token, refresh_token, _jti = service.issue_tokens(user)
+    await service.store_refresh_token(refresh_token, user.id, db)
+
+    return schemas.AuthResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user=schemas.UserResponse.model_validate(user),
+    )

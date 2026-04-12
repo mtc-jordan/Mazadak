@@ -46,6 +46,20 @@ def _load_key(path: str) -> str:
 _private_key = _load_key(settings.JWT_PRIVATE_KEY_PATH)
 _public_key = _load_key(settings.JWT_PUBLIC_KEY_PATH)
 
+# ── Startup safety checks ──────────────────────────────────────
+
+if settings.ENVIRONMENT == "production":
+    if not _private_key or not _public_key:
+        raise RuntimeError(
+            "JWT RSA keys are missing. Generate them or mount via secrets. "
+            "See: openssl genrsa -out keys/private.pem 2048"
+        )
+    if settings.SECRET_KEY == "change-me-in-production":
+        raise RuntimeError(
+            "SECRET_KEY is still the default value. Set a secure random key "
+            "in production via the SECRET_KEY environment variable."
+        )
+
 
 # ── Token models ────────────────────────────────────────────────
 

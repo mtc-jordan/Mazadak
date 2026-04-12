@@ -13,6 +13,7 @@ Security headers (OWASP):
 
 from __future__ import annotations
 
+import logging
 import time
 
 from fastapi import Request, Response
@@ -21,6 +22,8 @@ from starlette.responses import JSONResponse
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 # ═══════════════════════════════════════════════════════════════════
 #  Rate Limiting Middleware (sliding window via Redis)
@@ -28,6 +31,16 @@ from app.core.config import settings
 
 # Paths exempt from rate limiting
 _EXEMPT_PATHS = frozenset({"/health", "/docs", "/redoc", "/openapi.json"})
+
+# Per-endpoint rate limits (requests per minute) — stricter than global
+# Key: path prefix → (limit, window_seconds)
+_ENDPOINT_LIMITS: dict[str, tuple[int, int]] = {
+    "/api/v1/auth/register":             (10, 60),    # OTP send: 10/min per IP
+    "/api/v1/auth/verify-otp":           (10, 60),    # OTP verify: 10/min per IP
+    "/api/v1/auth/change-phone":         (5, 60),     # Phone change: 5/min per user
+    "/api/v1/auctions/emergency-kill":   (2, 60),     # Kill switch: 2/min
+    "/api/v1/auctions/emergency-resume": (2, 60),     # Resume: 2/min
+}
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -52,6 +65,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             from app.core.redis import get_redis
             redis = await get_redis()
         except Exception:
+            logger.warning("rate_limit_bypassed: Redis unavailable, all requests allowed")
             return await call_next(request)
 
         # Determine key and limit
@@ -64,7 +78,31 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             key = f"rl:ip:{client_ip}"
             limit = settings.RATE_LIMIT_UNAUTH
 
-        # Sliding window: minute bucket
+        # Per-endpoint rate limit check (stricter, checked first)
+        endpoint_limit = self._get_endpoint_limit(path)
+        if endpoint_limit:
+            ep_limit, ep_window = endpoint_limit
+            ep_bucket = int(time.time()) // ep_window
+            ep_key = f"rl:ep:{path}:{key}:{ep_bucket}"
+            try:
+                ep_count = await redis.incr(ep_key)
+                if ep_count == 1:
+                    await redis.expire(ep_key, ep_window * 2)
+                if ep_count > ep_limit:
+                    retry_after = ep_window - (int(time.time()) % ep_window)
+                    return JSONResponse(
+                        status_code=429,
+                        content={
+                            "success": False,
+                            "message": "Rate limit exceeded for this endpoint.",
+                            "data": None,
+                        },
+                        headers={"Retry-After": str(retry_after)},
+                    )
+            except Exception:
+                pass
+
+        # Global sliding window: minute bucket
         minute_bucket = int(time.time()) // 60
         bucket_key = f"{key}:{minute_bucket}"
 
@@ -86,9 +124,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 )
         except Exception:
             # Fail open — don't block requests if Redis is down
+            logger.warning("rate_limit_check_failed: Redis error during sliding window check")
             pass
 
         return await call_next(request)
+
+    @staticmethod
+    def _get_endpoint_limit(path: str) -> tuple[int, int] | None:
+        """Match path against per-endpoint limits."""
+        for prefix, limit_tuple in _ENDPOINT_LIMITS.items():
+            if path.startswith(prefix):
+                return limit_tuple
+        return None
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     JWT_PUBLIC_KEY_PATH: str = "keys/public.pem"
     JWT_ALGORITHM: str = "RS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     OTP_EXPIRE_SECONDS: int = 300          # 5 minutes
     OTP_MAX_REQUESTS_PER_HOUR: int = 5     # rate limit per phone
     OTP_MAX_VERIFY_ATTEMPTS: int = 3       # wrong OTPs before lockout

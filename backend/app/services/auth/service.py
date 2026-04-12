@@ -81,12 +81,19 @@ async def check_otp_lockout(phone: str, redis: Redis) -> tuple[bool, int | None]
     return False, None
 
 
-async def send_otp(phone: str, redis: Redis) -> tuple[bool, str | None, dict | None]:
+async def send_otp(
+    phone: str, redis: Redis, *, purpose: str = "login",
+) -> tuple[bool, str | None, dict | None]:
     """Generate OTP, hash it, store in Redis, send via SMS.
+
+    Args:
+        purpose: "login" (default) or "change_phone" — uses different
+                 Redis key prefix to avoid collision.
 
     Returns (success, error_code, error_detail).
     """
     last4 = _phone_last4(phone)
+    prefix = f"{purpose}:" if purpose != "login" else ""
 
     # Check lockout first
     locked, lockout_ttl = await check_otp_lockout(phone, redis)
@@ -114,12 +121,12 @@ async def send_otp(phone: str, redis: Redis) -> tuple[bool, str | None, dict | N
     otp = f"{secrets.randbelow(1000000):06d}"
     otp_hash = sha256(otp.encode()).hexdigest()
 
-    # Store hash in Redis with 5-min TTL
-    otp_key = OTP_KEY.format(phone=phone)
+    # Store hash in Redis with 5-min TTL (prefixed for purpose isolation)
+    otp_key = f"{prefix}{OTP_KEY.format(phone=phone)}"
     await redis.setex(otp_key, settings.OTP_EXPIRE_SECONDS, otp_hash)
 
     # Reset attempt counter for this OTP
-    attempts_key = OTP_ATTEMPTS_KEY.format(phone=phone)
+    attempts_key = f"{prefix}{OTP_ATTEMPTS_KEY.format(phone=phone)}"
     await redis.setex(attempts_key, settings.OTP_EXPIRE_SECONDS, "0")
 
     # Send SMS (Twilio primary, SNS fallback)
@@ -128,7 +135,7 @@ async def send_otp(phone: str, redis: Redis) -> tuple[bool, str | None, dict | N
     if not sent:
         logger.error("otp_sms_failed phone_last4=%s providers=all", last4)
 
-    logger.info("otp_sent phone_last4=%s", last4)
+    logger.info("otp_sent phone_last4=%s purpose=%s", last4, purpose)
     return True, None, None
 
 
@@ -138,7 +145,7 @@ async def send_otp(phone: str, redis: Redis) -> tuple[bool, str | None, dict | N
 
 
 async def verify_otp(
-    phone: str, otp: str, redis: Redis,
+    phone: str, otp: str, redis: Redis, *, purpose: str = "login",
 ) -> tuple[bool, str | None, dict | None]:
     """Verify OTP against stored hash using constant-time comparison.
 
@@ -146,6 +153,7 @@ async def verify_otp(
     Returns (success, error_code, error_detail).
     """
     last4 = _phone_last4(phone)
+    prefix = f"{purpose}:" if purpose != "login" else ""
 
     # Check lockout
     locked, lockout_ttl = await check_otp_lockout(phone, redis)
@@ -157,7 +165,7 @@ async def verify_otp(
             "retry_after_seconds": lockout_ttl,
         }
 
-    otp_key = OTP_KEY.format(phone=phone)
+    otp_key = f"{prefix}{OTP_KEY.format(phone=phone)}"
     stored_hash = await redis.get(otp_key)
     if not stored_hash:
         return False, "OTP_EXPIRED", {
@@ -167,7 +175,7 @@ async def verify_otp(
         }
 
     # Increment attempt counter
-    attempts_key = OTP_ATTEMPTS_KEY.format(phone=phone)
+    attempts_key = f"{prefix}{OTP_ATTEMPTS_KEY.format(phone=phone)}"
     attempts = await redis.incr(attempts_key)
 
     # Check if max attempts exceeded → lockout

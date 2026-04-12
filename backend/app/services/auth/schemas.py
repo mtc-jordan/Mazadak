@@ -146,6 +146,22 @@ class AuthResponse(BaseModel):
     user: UserResponse
 
 
+# ── Profile update (FR-AUTH-009) ────────────────────────────────
+
+class UpdateProfileRequest(BaseModel):
+    full_name: str | None = Field(default=None, min_length=1, max_length=255)
+    full_name_ar: str | None = Field(default=None, min_length=1, max_length=255)
+    email: str | None = Field(default=None, max_length=255, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    preferred_language: str | None = Field(default=None, pattern=r"^(ar|en)$")
+    address_city: str | None = Field(default=None, max_length=100)
+    address_country: str | None = Field(default=None, pattern=r"^[A-Z]{2}$")
+
+
+class UpdateProfileResponse(BaseModel):
+    success: bool = True
+    user: UserResponse
+
+
 # ── Error detail ────────────────────────────────────────────────
 
 class ErrorDetail(BaseModel):
@@ -202,3 +218,24 @@ class KYCQueueItem(BaseModel):
 class KYCReviewRequest(BaseModel):
     decision: str = Field(..., pattern=r"^(approve|reject)$")
     reason: str = Field(default="", max_length=500)
+
+
+# ── Phone number change (FR-AUTH-010) ──────────────────────────
+
+class ChangePhoneRequest(BaseModel):
+    new_phone: Phone
+
+    @field_validator("new_phone")
+    @classmethod
+    def _validate_phone(cls, v: str) -> str:
+        return validate_phone_e164(v)
+
+
+class ChangePhoneVerifyRequest(BaseModel):
+    new_phone: Phone
+    otp: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+    @field_validator("new_phone")
+    @classmethod
+    def _validate_phone(cls, v: str) -> str:
+        return validate_phone_e164(v)
