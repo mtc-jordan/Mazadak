@@ -83,6 +83,9 @@ async def _count_listing_images(listing_id: str, db: AsyncSession) -> int:
     return (await db.execute(q)).scalar() or 0
 
 
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+
+
 def _generate_presigned_put(listing_id: str, count: int, content_types: list[str] | None = None) -> list[dict]:
     """Generate S3 presigned PUT URLs for image uploads.
 
@@ -97,6 +100,8 @@ def _generate_presigned_put(listing_id: str, count: int, content_types: list[str
         s3 = boto3.client("s3", region_name=settings.AWS_REGION)
         for i in range(count):
             ct = (content_types[i] if content_types and i < len(content_types) else default_ct)
+            if ct not in ALLOWED_IMAGE_TYPES:
+                ct = default_ct
             ext = "jpg" if "jpeg" in ct else ct.split("/")[-1]
             key = f"media/{listing_id}/img_{uuid4()}.{ext}"
             url = s3.generate_presigned_url(
@@ -115,6 +120,8 @@ def _generate_presigned_put(listing_id: str, count: int, content_types: list[str
         # Fallback for tests / local dev without AWS creds
         for i in range(count):
             ct = (content_types[i] if content_types and i < len(content_types) else default_ct)
+            if ct not in ALLOWED_IMAGE_TYPES:
+                ct = default_ct
             ext = "jpg" if "jpeg" in ct else ct.split("/")[-1]
             key = f"media/{listing_id}/img_{uuid4()}.{ext}"
             urls.append({
@@ -157,6 +164,7 @@ async def create_listing(
         description_en=data.description_en,
         category_id=data.category_id,
         condition=data.condition.value,
+        currency=data.currency,
         starting_price=data.starting_price,
         reserve_price=data.reserve_price,
         buy_it_now_price=data.buy_it_now_price,
@@ -194,6 +202,7 @@ async def get_listings(
     seller_id: str | None = None,
     is_certified: bool | None = None,
     is_charity: bool | None = None,
+    is_featured: bool | None = None,
     ends_before: datetime | None = None,
     sort: str | None = None,
     limit: int = 20,
@@ -226,6 +235,8 @@ async def get_listings(
         query = query.where(Listing.is_certified == is_certified)
     if is_charity is not None:
         query = query.where(Listing.is_charity == is_charity)
+    if is_featured is not None:
+        query = query.where(Listing.is_featured == is_featured)
     if ends_before is not None:
         query = query.where(Listing.ends_at <= ends_before)
 
@@ -518,9 +529,11 @@ async def toggle_watch(
         watch_key = f"watchers:{listing_id}"
         is_member = await redis.sismember(watch_key, user_id)
 
+        user_key = f"user_watchlist:{user_id}"
         if is_member:
             # Unwatch
             await redis.srem(watch_key, user_id)
+            await redis.srem(user_key, listing_id)
             await db.execute(
                 update(Listing)
                 .where(Listing.id == listing_id)
@@ -530,6 +543,7 @@ async def toggle_watch(
         else:
             # Watch
             await redis.sadd(watch_key, user_id)
+            await redis.sadd(user_key, listing_id)
             await db.execute(
                 update(Listing)
                 .where(Listing.id == listing_id)
@@ -548,6 +562,22 @@ async def toggle_watch(
 
     listing = await db.get(Listing, listing_id)
     return watching, listing.watcher_count if listing else 0
+
+
+async def get_user_watchlist(user_id: str, db: AsyncSession) -> list[str]:
+    """Return listing IDs that this user is watching.
+
+    Uses Redis reverse-index set ``user_watchlist:{user_id}``.
+    Falls back to an empty list if Redis is unavailable.
+    """
+    try:
+        from app.core.redis import get_redis
+        redis = await get_redis()
+        members = await redis.smembers(f"user_watchlist:{user_id}")
+        return [m if isinstance(m, str) else m.decode() for m in members]
+    except Exception:
+        logger.warning("Redis unavailable for watchlist lookup, user=%s", user_id)
+        return []
 
 
 # ── pHash duplicate detection ─────────────────────────────────

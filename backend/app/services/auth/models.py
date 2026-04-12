@@ -127,6 +127,10 @@ class User(Base, TimestampMixin):
     # -- FCM push tokens (JSON array) ---------------------------------
     fcm_tokens: Mapped[list | None] = mapped_column(JSONB, server_default="'[]'")
 
+    # -- Address (FR-AUTH-009) -----------------------------------------
+    address_city: Mapped[str | None] = mapped_column(String(100))
+    address_country: Mapped[str | None] = mapped_column(String(5))
+
     # -- Preferences & tracking --------------------------------------
     preferred_language: Mapped[str] = mapped_column(
         String(5), server_default="ar", nullable=False,

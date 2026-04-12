@@ -2,11 +2,10 @@
 Database seed script — populates dev environment with test data.
 
 Usage:
-    python -m scripts.seed          (from /backend)
-    docker compose exec api python -m scripts.seed
+    python -m app.db.seed                          (from /backend)
+    docker compose exec api python -m app.db.seed  (from Docker)
 
-Requires: migrations applied, PostgreSQL running.
-Uses raw SQL inserts matching the 0001_initial_schema migration.
+Requires: migrations applied (0001 + 0002), PostgreSQL running.
 
 Price units:
   listings  → INTEGER cents  (1 JOD = 100 cents)
@@ -290,7 +289,17 @@ async def seed():
                      :is_charity, :ngo_id,
                      'approved', 2500, 'JO')
             """), lst)
-        print(f"  + {len(listings)} listings (3 active, 1 ended, 1 draft)")
+
+        # Feature the Mercedes listing (0002 migration columns)
+        await db.execute(text("""
+            UPDATE listings
+            SET is_featured = true,
+                featured_at = :now,
+                featured_until = :until
+            WHERE id = :id
+        """), {"id": listing_2_id, "now": NOW, "until": NOW + timedelta(days=7)})
+
+        print(f"  + {len(listings)} listings (3 active, 1 ended, 1 draft, 1 featured)")
 
         # ── Listing Images ────────────────────────────────────────
         listing_images = [
@@ -441,7 +450,7 @@ async def seed():
         # ── Escrow (ended laptop auction, Numeric JOD) ────────────
         escrow_id = _uuid()
         escrow_amount = 7000.000     # 7000 JOD
-        seller_amount = 6650.000     # 7000 - 5% = 6650 JOD
+        seller_amount = 6300.000     # 7000 - 10% fee = 6300 JOD
 
         await db.execute(text("""
             INSERT INTO escrows
@@ -498,6 +507,58 @@ async def seed():
             """), {"id": _uuid(), "user_id": uid})
         print("  + 6 notification preferences (defaults)")
 
+        # ── User address fields (0002 migration) ─────────────────
+        address_data = [
+            (SELLER_1_ID, "عمّان", "JO"),
+            (SELLER_2_ID, "إربد", "JO"),
+            (BUYER_1_ID, "عمّان", "JO"),
+            (BUYER_2_ID, "العقبة", "JO"),
+        ]
+        for uid, city, country in address_data:
+            await db.execute(text("""
+                UPDATE users SET address_city = :city, address_country = :country
+                WHERE id = :id
+            """), {"id": uid, "city": city, "country": country})
+        print(f"  + {len(address_data)} user addresses")
+
+        # ── Announcements (0002 migration table) ─────────────────
+        announcements = [
+            {
+                "title_ar": "مرحباً بكم في مزادك!",
+                "title_en": "Welcome to MZADAK!",
+                "body_ar": "أول منصة مزادات ذكية في الأردن. سجّل الآن واحصل على مزايدات مجانية.",
+                "body_en": "Jordan's first AI-powered auction marketplace. Register now and get free bids.",
+                "type": "info",
+                "is_active": True,
+                "target_audience": "all",
+                "starts_at": NOW - timedelta(days=1),
+                "expires_at": NOW + timedelta(days=30),
+            },
+            {
+                "title_ar": "صيانة مجدولة",
+                "title_en": "Scheduled Maintenance",
+                "body_ar": "سيتم إجراء صيانة مجدولة يوم الجمعة من 2-4 صباحاً. قد تتأثر بعض الخدمات.",
+                "body_en": "Scheduled maintenance this Friday 2-4 AM. Some services may be affected.",
+                "type": "warning",
+                "is_active": False,
+                "target_audience": "all",
+                "starts_at": None,
+                "expires_at": None,
+            },
+        ]
+        for ann in announcements:
+            await db.execute(text("""
+                INSERT INTO announcements
+                    (id, title_ar, title_en, body_ar, body_en,
+                     type, is_active, starts_at, expires_at,
+                     target_audience, created_by)
+                VALUES
+                    (gen_random_uuid(), :title_ar, :title_en, :body_ar, :body_en,
+                     :type, :is_active, :starts_at, :expires_at,
+                     :target_audience, :created_by)
+            """), {**ann, "created_by": ADMIN_ID})
+        print(f"  + {len(announcements)} announcements")
+
         # ── Sample notifications (String event_type, no enum) ─────
         notifications = [
             (BUYER_1_ID, "new_bid", listing_1_id, "listing",
@@ -541,12 +602,19 @@ async def seed():
         await db.commit()
         print("\nDatabase seeded successfully!")
         print(f"\nDev accounts (all phone-verified, KYC approved):")
-        print(f"  Admin:    +962790000001")
-        print(f"  Seller 1: +962790000002 (Ahmed)")
-        print(f"  Seller 2: +962790000003 (Sara, Pro Seller)")
-        print(f"  Buyer 1:  +962790000004 (Mohammed)")
-        print(f"  Buyer 2:  +962790000005 (Layla)")
-        print(f"  Mediator: +962790000006 (Khaled)")
+        print(f"  Superadmin: +962790000001 (login to web admin)")
+        print(f"  Seller 1:   +962790000002 (Ahmed, Amman)")
+        print(f"  Seller 2:   +962790000003 (Sara, Pro Seller, Irbid)")
+        print(f"  Buyer 1:    +962790000004 (Mohammed, Amman)")
+        print(f"  Buyer 2:    +962790000005 (Layla, Aqaba)")
+        print(f"  Admin:      +962790000006 (Khaled, mediator)")
+        print(f"\nSample data:")
+        print(f"  - 3 active auctions (iPhone, Mercedes [featured], Charity Art)")
+        print(f"  - 1 ended auction (MacBook) with escrow in shipping_requested")
+        print(f"  - 1 draft listing (PS5)")
+        print(f"  - 14 bids across all auctions")
+        print(f"  - 2 announcements (welcome + maintenance)")
+        print(f"  - OTP in dev mode: any 6 digits work (SMS_PROVIDER=mock)")
 
     await engine.dispose()
 

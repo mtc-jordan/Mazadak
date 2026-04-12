@@ -59,6 +59,17 @@ async def _audit(
     db.add(entry)
 
 
+async def log_audit(
+    admin_id: str,
+    action: str,
+    entity_type: str | None,
+    entity_id: str | None,
+    db: AsyncSession,
+) -> None:
+    """Public audit logging for use by router endpoints."""
+    await _audit(admin_id, action, db, entity_type=entity_type, entity_id=entity_id)
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  Moderation queue
 # ═══════════════════════════════════════════════════════════════════

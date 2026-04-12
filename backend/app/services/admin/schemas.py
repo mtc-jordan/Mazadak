@@ -183,3 +183,73 @@ class DashboardPeriodStats(BaseModel):
     revenue_24h: float = 0.0
     avg_moderation_wait_time_minutes: float = 0.0
     sla_breach_count: int = 0
+
+
+# ── Featured listings (FR-LIST-010) ─────────────────────────────
+
+class FeatureListingRequest(BaseModel):
+    duration_hours: int = Field(default=168, ge=1, le=720, description="Feature duration (1h-30d)")
+
+
+# ── Category management (FR-ADMIN-012) ──────────────────────────
+
+class CreateCategoryRequest(BaseModel):
+    name_ar: str = Field(..., min_length=1, max_length=200)
+    name_en: str = Field(..., min_length=1, max_length=200)
+    slug: str = Field(..., min_length=1, max_length=100, pattern=r"^[a-z0-9\-]+$")
+    parent_id: int | None = None
+    sort_order: int = Field(default=0, ge=0)
+
+
+class UpdateCategoryRequest(BaseModel):
+    name_ar: str | None = Field(default=None, min_length=1, max_length=200)
+    name_en: str | None = Field(default=None, min_length=1, max_length=200)
+    slug: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[a-z0-9\-]+$")
+    parent_id: int | None = None
+    sort_order: int | None = None
+
+
+# ── Announcement management (FR-ADMIN-011) ──────────────────────
+
+class AnnouncementOut(BaseModel):
+    id: str
+    title_ar: str
+    title_en: str
+    body_ar: str | None = None
+    body_en: str | None = None
+    type: str
+    is_active: bool = True
+    starts_at: datetime | None = None
+    expires_at: datetime | None = None
+    target_audience: str = "all"
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class CreateAnnouncementRequest(BaseModel):
+    title_ar: str = Field(..., min_length=1, max_length=200)
+    title_en: str = Field(..., min_length=1, max_length=200)
+    body_ar: str | None = Field(default=None, max_length=2000)
+    body_en: str | None = Field(default=None, max_length=2000)
+    type: str = Field(default="info", pattern=r"^(info|warning|promotion|maintenance)$")
+    starts_at: datetime | None = None
+    expires_at: datetime | None = None
+    target_audience: str = Field(default="all", pattern=r"^(all|buyers|sellers|admins)$")
+
+
+class UpdateAnnouncementRequest(BaseModel):
+    title_ar: str | None = Field(default=None, min_length=1, max_length=200)
+    title_en: str | None = Field(default=None, min_length=1, max_length=200)
+    body_ar: str | None = Field(default=None, max_length=2000)
+    body_en: str | None = Field(default=None, max_length=2000)
+    type: str | None = Field(default=None, pattern=r"^(info|warning|promotion|maintenance)$")
+    is_active: bool | None = None
+    starts_at: datetime | None = None
+    expires_at: datetime | None = None
+    target_audience: str | None = Field(default=None, pattern=r"^(all|buyers|sellers|admins)$")
+
+
+class AnnouncementListResponse(BaseModel):
+    items: list[AnnouncementOut]
+    total: int

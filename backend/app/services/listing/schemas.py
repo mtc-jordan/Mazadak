@@ -29,6 +29,9 @@ _ARABIC_RE = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\
 
 # ── Create / Update ──────────────────────────────────────────
 
+SUPPORTED_CURRENCIES = {"JOD", "SAR", "AED"}
+
+
 class CreateListingRequest(BaseModel):
     title_ar: str = Field(..., min_length=3, max_length=200)
     title_en: str = Field(..., min_length=3, max_length=200)
@@ -43,10 +46,19 @@ class CreateListingRequest(BaseModel):
         return v
     category_id: int
     condition: ListingCondition
+    currency: str = Field(default="JOD", max_length=3, description="ISO 4217 currency code")
     starting_price: int = Field(..., ge=100, description="Price in cents, min 100 (1 JOD)")
     reserve_price: int | None = Field(default=None, ge=100)
     buy_it_now_price: int | None = Field(default=None, ge=100)
     min_increment: int = Field(default=2500, ge=100, description="Min bid increment in cents")
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, v: str) -> str:
+        v = v.upper()
+        if v not in SUPPORTED_CURRENCIES:
+            raise ValueError(f"Unsupported currency: {v}. Supported: {', '.join(sorted(SUPPORTED_CURRENCIES))}")
+        return v
     starts_at: datetime
     ends_at: datetime
     location_city: str | None = Field(default=None, max_length=100)
@@ -92,10 +104,21 @@ class UpdateListingRequest(BaseModel):
     description_en: str | None = Field(default=None, max_length=5000)
     category_id: int | None = None
     condition: ListingCondition | None = None
+    currency: str | None = Field(default=None, max_length=3)
     starting_price: int | None = Field(default=None, ge=100)
     reserve_price: int | None = Field(default=None, ge=100)
     buy_it_now_price: int | None = Field(default=None, ge=100)
     min_increment: int | None = Field(default=None, ge=100)
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.upper()
+        if v not in SUPPORTED_CURRENCIES:
+            raise ValueError(f"Unsupported currency: {v}. Supported: {', '.join(sorted(SUPPORTED_CURRENCIES))}")
+        return v
     starts_at: datetime | None = None
     ends_at: datetime | None = None
     location_city: str | None = Field(default=None, max_length=100)
@@ -119,7 +142,7 @@ class UpdateListingRequest(BaseModel):
 
 class ImageUploadRequest(BaseModel):
     """Request presigned URLs for image upload."""
-    count: int = Field(..., ge=1, le=10)
+    count: int = Field(..., ge=1, le=20)
     content_types: list[str] | None = Field(
         default=None,
         description="MIME types per image (default image/jpeg)",
@@ -138,7 +161,7 @@ class ImageUploadResponse(BaseModel):
 
 class ImageConfirmRequest(BaseModel):
     """Confirm uploaded images with their S3 keys."""
-    s3_keys: list[str] = Field(..., min_length=1, max_length=10)
+    s3_keys: list[str] = Field(..., min_length=1, max_length=20)
 
 
 class ImageConfirmResponse(BaseModel):
@@ -186,6 +209,7 @@ class ListingResponse(BaseModel):
     is_charity: bool = False
     ngo_id: int | None = None
     # Prices in cents
+    currency: str = "JOD"
     starting_price: int
     reserve_price: int | None = None
     buy_it_now_price: int | None = None
@@ -207,6 +231,10 @@ class ListingResponse(BaseModel):
     moderation_status: str = "pending"
     phash: str | None = None
     view_count: int = 0
+    # Featured
+    is_featured: bool = False
+    featured_at: datetime | None = None
+    featured_until: datetime | None = None
     # Images
     images: list[ListingImageOut] = []
     # Timestamps
@@ -250,3 +278,35 @@ class WatchResponse(BaseModel):
     listing_id: str
     watching: bool
     watcher_count: int
+
+
+# ── Category response (FR-LIST-003) ─────────────────────────
+
+# ── Share / deep link (FR-LIST-013, FR-AUC-019) ─────────────
+
+class ShareMetadata(BaseModel):
+    listing_id: str
+    title: str
+    description: str
+    image_url: str | None = None
+    share_url: str
+    deep_link: str
+
+
+# ── Category response (FR-LIST-003) ─────────────────────────
+
+class CategoryOut(BaseModel):
+    id: int
+    parent_id: int | None = None
+    name_ar: str
+    name_en: str
+    slug: str
+    sort_order: int
+    children: list["CategoryOut"] = []
+
+    model_config = {"from_attributes": True}
+
+
+class CategoryTreeResponse(BaseModel):
+    categories: list[CategoryOut]
+    total: int

@@ -179,6 +179,11 @@ class Dispute(Base, TimestampMixin):
     seller_evidence_count: Mapped[int] = mapped_column(
         Integer, server_default="0", nullable=False,
     )
+    # -- Seller response (FR-DISP-004) ──────────────────────────
+    seller_response: Mapped[str | None] = mapped_column(Text)
+    seller_responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    seller_response_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    seller_proposed_resolution: Mapped[str | None] = mapped_column(String(50))
 
 
 class DisputeEvidence(Base):
@@ -195,6 +200,72 @@ class DisputeEvidence(Base):
     sha256_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     file_size: Mapped[int | None] = mapped_column(Integer)
     uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+
+
+class NgoPartner(Base):
+    """NGO partners for charity auctions — zakat-eligible organizations."""
+
+    __tablename__ = "ngo_partners"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name_en: Mapped[str] = mapped_column(String(200), nullable=False)
+    name_ar: Mapped[str] = mapped_column(String(200), nullable=False)
+    logo_s3_key: Mapped[str | None] = mapped_column(String(500))
+    is_zakat_eligible: Mapped[bool] = mapped_column(
+        server_default="false", nullable=False,
+    )
+    is_active: Mapped[bool] = mapped_column(
+        server_default="true", nullable=False,
+    )
+    checkout_merchant_id: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+
+
+class ZakatReceipt(Base):
+    """Zakat receipt issued for charity auction proceeds."""
+
+    __tablename__ = "zakat_receipts"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    escrow_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    ngo_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    buyer_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)  # cents
+    receipt_number: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    pdf_s3_key: Mapped[str | None] = mapped_column(String(500))
+    issued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+
+
+class DisputeMessage(Base):
+    """Dispute communication thread — buyer, seller, and admin messages."""
+
+    __tablename__ = "dispute_messages"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    dispute_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
+    sender_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    sender_role: Mapped[str] = mapped_column(String(10), nullable=False)  # buyer, seller, admin
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    attachment_s3_key: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=text("now()"),

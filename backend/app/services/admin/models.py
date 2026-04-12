@@ -6,11 +6,13 @@ Maps to admin_audit_log table from 0001_initial_schema migration.
 
 from __future__ import annotations
 
-from sqlalchemy import DateTime, String, Text, text
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID, INET
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base
+from app.core.database import Base, TimestampMixin
 
 
 class AdminAuditLog(Base):
@@ -34,3 +36,30 @@ class AdminAuditLog(Base):
         nullable=False,
         server_default=text("now()"),
     )
+
+
+class Announcement(Base, TimestampMixin):
+    """Platform announcements / banners — FR-ADMIN-011."""
+
+    __tablename__ = "announcements"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    title_ar: Mapped[str] = mapped_column(String(200), nullable=False)
+    title_en: Mapped[str] = mapped_column(String(200), nullable=False)
+    body_ar: Mapped[str | None] = mapped_column(Text)
+    body_en: Mapped[str | None] = mapped_column(Text)
+    type: Mapped[str] = mapped_column(
+        String(20), server_default="info", nullable=False,
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, server_default="true", nullable=False,
+    )
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    target_audience: Mapped[str] = mapped_column(
+        String(20), server_default="all", nullable=False,
+    )
+    created_by: Mapped[str | None] = mapped_column(UUID(as_uuid=False))

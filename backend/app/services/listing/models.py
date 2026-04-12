@@ -19,6 +19,21 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base, TimestampMixin
 
 
+# ── Categories ────────────────────────────────────────────────
+
+class Category(Base):
+    __tablename__ = "categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("categories.id"), nullable=True,
+    )
+    name_ar: Mapped[str] = mapped_column(String(200), nullable=False)
+    name_en: Mapped[str] = mapped_column(String(200), nullable=False)
+    slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+
+
 # ── Enums (must match CREATE TYPE in migration) ────────────────
 
 class ListingCondition(str, enum.Enum):
@@ -70,6 +85,11 @@ class Listing(Base, TimestampMixin):
     )
     ngo_id: Mapped[int | None] = mapped_column(Integer)
 
+    # -- Currency ------------------------------------------------
+    currency: Mapped[str] = mapped_column(
+        String(3), server_default="JOD", nullable=False,
+    )
+
     # -- Prices in INTEGER cents ---------------------------------
     starting_price: Mapped[int] = mapped_column(Integer, nullable=False)
     reserve_price: Mapped[int | None] = mapped_column(Integer)
@@ -119,6 +139,13 @@ class Listing(Base, TimestampMixin):
     view_count: Mapped[int] = mapped_column(
         Integer, server_default="0", nullable=False,
     )
+
+    # -- Featured (FR-LIST-010) --------------------------------------
+    is_featured: Mapped[bool] = mapped_column(
+        Boolean, server_default="false", nullable=False,
+    )
+    featured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    featured_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # -- Relationships -------------------------------------------
     images: Mapped[list["ListingImage"]] = relationship(

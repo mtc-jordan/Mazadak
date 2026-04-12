@@ -27,6 +27,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.escrow.models import (
+    Dispute,
     Escrow,
     EscrowEvent,
     VALID_TRANSITIONS,
@@ -131,6 +132,9 @@ async def transition_escrow(
         escrow.shipping_deadline = now + timedelta(hours=48)
     elif new_state == "inspection_period":
         escrow.inspection_deadline = now + timedelta(hours=72)
+    elif new_state == "disputed":
+        # FR-DISP-004: Set 48h seller response deadline on dispute creation
+        escrow.evidence_deadline = now + timedelta(hours=48)
     elif new_state == "under_review":
         escrow.release_deadline = now + timedelta(hours=144)
 

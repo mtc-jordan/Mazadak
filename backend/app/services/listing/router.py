@@ -5,19 +5,20 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from sqlalchemy import select
 
 from app.core.database import get_db
 from app.core.types import UUIDPath
 from app.services.auth.dependencies import require_kyc, require_seller
 from app.services.auth.models import User
 from app.services.listing import schemas, service
+from app.services.admin.models import Announcement
 from app.services.listing.dependencies import get_listing_or_404, get_own_listing
-from app.services.listing.models import Listing, ListingStatus
+from app.services.listing.models import Category, Listing, ListingStatus
 
 router = APIRouter(prefix="/listings", tags=["listings"])
+category_router = APIRouter(prefix="/categories", tags=["categories"])
 
 
 def _listing_to_response(
@@ -54,6 +55,7 @@ def _listing_to_response(
         is_certified=listing.is_certified,
         is_charity=listing.is_charity,
         ngo_id=listing.ngo_id,
+        currency=listing.currency,
         starting_price=listing.starting_price,
         reserve_price=listing.reserve_price,
         buy_it_now_price=listing.buy_it_now_price,
@@ -72,6 +74,9 @@ def _listing_to_response(
         moderation_status=listing.moderation_status,
         phash=listing.phash,
         view_count=listing.view_count,
+        is_featured=listing.is_featured,
+        featured_at=listing.featured_at,
+        featured_until=listing.featured_until,
         images=images,
         created_at=listing.created_at,
         updated_at=listing.updated_at,
@@ -116,6 +121,7 @@ async def list_listings(
     seller_id: str | None = None,
     is_certified: bool | None = None,
     is_charity: bool | None = None,
+    is_featured: bool | None = None,
     ends_before: datetime | None = None,
     sort: str | None = Query(
         default=None,
@@ -136,6 +142,7 @@ async def list_listings(
         seller_id=seller_id,
         is_certified=is_certified,
         is_charity=is_charity,
+        is_featured=is_featured,
         ends_before=ends_before,
         sort=sort,
         limit=limit,
@@ -354,6 +361,66 @@ async def publish_listing(
     )
 
 
+# ── GET /:id/share — Share metadata (FR-LIST-013) ───────────────
+
+@router.get("/{listing_id}/share", response_model=schemas.ShareMetadata)
+async def get_share_metadata(
+    listing: Listing = Depends(get_listing_or_404),
+):
+    """Generate share metadata and deep link for a listing.
+
+    FR-LIST-013: Provides OG metadata for social sharing + deep link for mobile.
+    """
+    image_url = None
+    if listing.images:
+        # Use the first image's thumb_800 or original
+        first_img = listing.images[0]
+        s3_key = first_img.s3_key_thumb_800 or first_img.s3_key
+        image_url = f"https://media.mzadak.com/{s3_key}"
+
+    share_url = f"https://mzadak.com/listings/{listing.id}"
+    deep_link = f"mzadak://listing/{listing.id}"
+
+    return schemas.ShareMetadata(
+        listing_id=listing.id,
+        title=listing.title_ar,
+        description=(listing.description_ar or listing.title_ar)[:160],
+        image_url=image_url,
+        share_url=share_url,
+        deep_link=deep_link,
+    )
+
+
+# ── GET /watchlist — User's watched listings (FR-LIST-014) ────
+
+@router.get("/watchlist/mine", response_model=schemas.ListingListResponse)
+async def get_my_watchlist(
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(require_kyc),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the authenticated user's watched listings."""
+    watched_ids = await service.get_user_watchlist(user.id, db)
+    if not watched_ids:
+        return schemas.ListingListResponse(data=[], total_count=0, limit=limit, offset=offset)
+
+    result = await db.execute(
+        select(Listing)
+        .where(Listing.id.in_(watched_ids))
+        .where(Listing.status == ListingStatus.ACTIVE.value)
+        .offset(offset)
+        .limit(limit)
+    )
+    listings = result.scalars().all()
+    return schemas.ListingListResponse(
+        data=[_listing_to_response(lst) for lst in listings],
+        total_count=len(watched_ids),
+        limit=limit,
+        offset=offset,
+    )
+
+
 # ── POST /:id/watch — Toggle watchlist ─────────────────────────
 
 @router.post("/{listing_id}/watch", response_model=schemas.WatchResponse)
@@ -369,3 +436,196 @@ async def toggle_watch(
         watching=watching,
         watcher_count=watcher_count,
     )
+
+
+# ── GET /mine/analytics — Seller listing analytics ────────────
+
+@router.get("/mine/analytics")
+async def seller_analytics(
+    user: User = Depends(require_seller),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return analytics summary for the seller's listings.
+
+    Includes: total views, total bids, active/ended counts,
+    total revenue (from ended auctions with winners), conversion rate.
+    """
+    from app.services.auction.models import Auction, AuctionStatus
+
+    # Aggregate listing stats
+    result = await db.execute(
+        select(
+            func.count(Listing.id).label("total_listings"),
+            func.sum(Listing.view_count).label("total_views"),
+            func.sum(Listing.bid_count).label("total_bids"),
+            func.sum(Listing.watcher_count).label("total_watchers"),
+        ).where(Listing.seller_id == user.id)
+    )
+    row = result.one()
+    total_listings = row.total_listings or 0
+    total_views = int(row.total_views or 0)
+    total_bids = int(row.total_bids or 0)
+    total_watchers = int(row.total_watchers or 0)
+
+    # Active / ended counts
+    status_result = await db.execute(
+        select(
+            Listing.status,
+            func.count(Listing.id),
+        )
+        .where(Listing.seller_id == user.id)
+        .group_by(Listing.status)
+    )
+    status_counts = {s: c for s, c in status_result.all()}
+    active_count = status_counts.get("active", 0)
+    ended_count = status_counts.get("ended", 0)
+
+    # Revenue from completed auctions
+    revenue_result = await db.execute(
+        select(func.sum(Auction.final_price))
+        .join(Listing, Auction.listing_id == Listing.id)
+        .where(
+            Listing.seller_id == user.id,
+            Auction.status == AuctionStatus.ENDED.value,
+            Auction.winner_id.isnot(None),
+        )
+    )
+    total_revenue_cents = int(revenue_result.scalar() or 0)
+    total_revenue_jod = round(total_revenue_cents / 100, 2)
+
+    # Conversion rate: listings that sold / total ended
+    sold_result = await db.execute(
+        select(func.count(Auction.id))
+        .join(Listing, Auction.listing_id == Listing.id)
+        .where(
+            Listing.seller_id == user.id,
+            Auction.status == AuctionStatus.ENDED.value,
+            Auction.winner_id.isnot(None),
+        )
+    )
+    sold_count = sold_result.scalar() or 0
+    conversion_rate = round(sold_count / ended_count * 100, 1) if ended_count > 0 else 0.0
+
+    return {
+        "total_listings": total_listings,
+        "active_listings": active_count,
+        "ended_listings": ended_count,
+        "total_views": total_views,
+        "total_bids": total_bids,
+        "total_watchers": total_watchers,
+        "total_sold": sold_count,
+        "total_revenue_jod": total_revenue_jod,
+        "conversion_rate_pct": conversion_rate,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Category endpoints (FR-LIST-003) — mounted at /categories
+# ═══════════════════════════════════════════════════════════════════
+
+@category_router.get("/", response_model=schemas.CategoryTreeResponse)
+async def list_categories(
+    flat: bool = Query(default=False, description="If true, return flat list instead of tree"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all categories as a nested tree or flat list."""
+    result = await db.execute(
+        select(Category).order_by(Category.sort_order)
+    )
+    all_cats = result.scalars().all()
+
+    if flat:
+        return schemas.CategoryTreeResponse(
+            categories=[schemas.CategoryOut.model_validate(c) for c in all_cats],
+            total=len(all_cats),
+        )
+
+    # Build tree: group by parent_id
+    by_parent: dict[int | None, list[schemas.CategoryOut]] = {}
+    for c in all_cats:
+        cat_out = schemas.CategoryOut.model_validate(c)
+        by_parent.setdefault(c.parent_id, []).append(cat_out)
+
+    # Attach children to parents
+    roots = by_parent.get(None, [])
+    for root in roots:
+        root.children = by_parent.get(root.id, [])
+
+    return schemas.CategoryTreeResponse(
+        categories=roots,
+        total=len(all_cats),
+    )
+
+
+@category_router.get("/{category_id}", response_model=schemas.CategoryOut)
+async def get_category(
+    category_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a single category by ID with its children."""
+    cat = await db.get(Category, category_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    result = await db.execute(
+        select(Category).where(Category.parent_id == category_id).order_by(Category.sort_order)
+    )
+    children = result.scalars().all()
+
+    cat_out = schemas.CategoryOut.model_validate(cat)
+    cat_out.children = [schemas.CategoryOut.model_validate(c) for c in children]
+    return cat_out
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Public announcements (consumed by mobile/web)
+# ═══════════════════════════════════════════════════════════════════
+
+announcements_router = APIRouter(prefix="/announcements", tags=["announcements"])
+
+
+@announcements_router.get("/active")
+async def get_active_announcements(
+    db: AsyncSession = Depends(get_db),
+):
+    """Return active announcements for display in mobile/web."""
+    from datetime import datetime as dt, timezone as tz
+    now = dt.now(tz.utc)
+    query = (
+        select(Announcement)
+        .where(Announcement.is_active == True)  # noqa: E712
+        .order_by(Announcement.created_at.desc())
+    )
+    result = await db.execute(query)
+    items = result.scalars().all()
+    # Filter by date range
+    active = []
+    for ann in items:
+        if ann.starts_at and ann.starts_at > now:
+            continue
+        if ann.expires_at and ann.expires_at < now:
+            continue
+        active.append({
+            "id": ann.id,
+            "title_ar": ann.title_ar,
+            "title_en": ann.title_en,
+            "body_ar": ann.body_ar,
+            "body_en": ann.body_en,
+            "type": ann.type,
+            "target_audience": ann.target_audience,
+        })
+    return {"announcements": active, "count": len(active)}
+
+
+# ── Currencies endpoint ─────────────────────────────────────
+
+@router.get("/currencies", summary="List supported currencies and exchange rates")
+async def get_currencies():
+    """Return supported currencies with metadata and current exchange rates."""
+    from app.services.listing.currency import get_supported_currencies, get_exchange_rate
+
+    currencies = get_supported_currencies()
+    # Add exchange rates relative to JOD
+    for c in currencies:
+        c["rate_from_jod"] = float(get_exchange_rate("JOD", c["code"]))
+    return {"currencies": currencies}

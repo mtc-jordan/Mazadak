@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     LISTING_PHASH_THRESHOLD: int = 92          # ≥ 92% similarity → flag
     LISTING_PRESIGNED_URL_EXPIRY: int = 300    # 5 min upload window
     LISTING_THUMBNAIL_SIZES: list[int] = [100, 400, 800]
-    MAX_LISTING_IMAGES: int = 10
+    MAX_LISTING_IMAGES: int = 20
 
     # ── Checkout.com (Payments) ──────────────────────────────────
     CHECKOUT_SECRET_KEY: str = ""
@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     CHECKOUT_WEBHOOK_SECRET: str = ""
     CHECKOUT_SUCCESS_URL: str = "https://mzadak.com/payment/success"
     CHECKOUT_FAILURE_URL: str = "https://mzadak.com/payment/failure"
-    PLATFORM_FEE_PERCENT: float = 5.0  # 5% platform commission
+    PLATFORM_FEE_PERCENT: float = 10.0  # 10% platform commission per BRD
 
     # ── AWS ──────────────────────────────────────────────────────
     AWS_REGION: str = "me-south-1"
@@ -124,6 +124,16 @@ class Settings(BaseSettings):
     WHATSAPP_WEBHOOK_VERIFY_TOKEN: str = ""     # Custom token for GET verification
     META_WEBHOOK_SECRET: str = ""               # HMAC secret for bot webhook verification
     WHATSAPP_RATE_LIMIT_PER_DAY: int = 5  # non-critical per user
+
+    # ── Aramex Shipping ─────────────────────────────────────────
+    ARAMEX_USERNAME: str = ""
+    ARAMEX_PASSWORD: str = ""
+    ARAMEX_ACCOUNT_NUMBER: str = ""
+    ARAMEX_ACCOUNT_PIN: str = ""
+    ARAMEX_ACCOUNT_ENTITY: str = "AMM"      # Amman hub
+    ARAMEX_ACCOUNT_COUNTRY_CODE: str = "JO"
+    ARAMEX_API_URL: str = "https://ws.aramex.net/ShippingAPI.V2/Shipping/Service_1_0.svc/json"
+    ARAMEX_TRACKING_URL: str = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json"
 
     # ── Email (SMTP / SendGrid) ─────────────────────────────────
     SMTP_HOST: str = ""
