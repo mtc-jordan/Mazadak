@@ -163,17 +163,65 @@ async def upload_tracking(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Seller uploads tracking info."""
+    """Seller uploads tracking info → escrow goes to in_transit.
+
+    Valid from `shipping_requested` (seller skipped Aramex label and is
+    using their own carrier) or `label_generated` (Aramex label exists).
+    """
     if user.id != escrow.seller_id:
         raise HTTPException(status_code=403, detail="Only seller can upload tracking")
     escrow.tracking_number = body.tracking_number
     escrow.carrier = body.carrier
-    return await service.transition_escrow(
-        escrow.id, "in_transit", user.id, ActorType.SELLER.value,
-        "seller.upload_tracking",
-        {"tracking_number": body.tracking_number, "carrier": body.carrier},
-        db,
-    )
+    try:
+        return await service.transition_escrow(
+            escrow.id, "in_transit", user.id, ActorType.SELLER.value,
+            "seller.upload_tracking",
+            {"tracking_number": body.tracking_number, "carrier": body.carrier},
+            db,
+        )
+    except service.InvalidTransitionError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "INVALID_ESCROW_STATE",
+                "message_en": str(exc),
+                "message_ar": "حالة الضمان لا تسمح برفع رقم التتبع",
+            },
+        ) from exc
+
+
+@router.post("/{escrow_id}/mark-delivered", response_model=schemas.EscrowOut)
+async def mark_delivered(
+    escrow: Escrow = Depends(get_escrow_as_participant),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Buyer marks the package as delivered → escrow enters inspection_period.
+
+    Starts the 72h inspection window.  After 72h, deadlines.py auto-releases
+    the funds; the buyer can also call confirm_receipt earlier to release
+    immediately, or file a dispute.
+
+    Valid from `label_generated`, `shipped`, `in_transit`, or `delivered`.
+    """
+    if user.id != escrow.winner_id:
+        raise HTTPException(
+            status_code=403, detail="Only buyer can mark the package delivered",
+        )
+    try:
+        return await service.transition_escrow(
+            escrow.id, "inspection_period", user.id, ActorType.BUYER.value,
+            "buyer.mark_delivered", {}, db,
+        )
+    except service.InvalidTransitionError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "INVALID_ESCROW_STATE",
+                "message_en": str(exc),
+                "message_ar": "حالة الضمان لا تسمح بتأكيد الاستلام",
+            },
+        ) from exc
 
 
 # ── GET /:id/invoice — Generate invoice (FR-ESC-024) ──────────

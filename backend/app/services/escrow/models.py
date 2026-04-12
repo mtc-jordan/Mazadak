@@ -32,13 +32,22 @@ class EscrowState(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+# NOTE on the carrier-event states (label_generated, shipped, in_transit,
+# delivered): the SDD describes a fully tracked carrier path, but in v1 we
+# do not poll Aramex for live tracking events.  Sellers either upload an
+# AWB number (upload_tracking → in_transit) or generate an Aramex label
+# (create_shipment → label_generated), and buyers explicitly mark
+# delivered (mark_delivered → inspection_period).  The extra transitions
+# below collapse the unreachable middle of the FSM into the few hops we
+# actually fire from production endpoints, while leaving the original
+# fully-tracked path intact for when Aramex polling lands in Phase 2.
 VALID_TRANSITIONS: dict[str, list[str]] = {
     "payment_pending":    ["funds_held", "cancelled"],
     "funds_held":         ["shipping_requested", "cancelled"],
-    "shipping_requested": ["label_generated", "disputed", "cancelled"],
-    "label_generated":    ["shipped", "disputed"],
+    "shipping_requested": ["label_generated", "in_transit", "disputed", "cancelled"],
+    "label_generated":    ["shipped", "in_transit", "inspection_period", "disputed"],
     "shipped":            ["in_transit", "disputed"],
-    "in_transit":         ["delivered", "disputed"],
+    "in_transit":         ["delivered", "inspection_period", "disputed"],
     "delivered":          ["inspection_period", "disputed"],
     "inspection_period":  ["released", "disputed"],
     "disputed":           ["under_review"],

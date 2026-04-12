@@ -477,6 +477,36 @@ class TestFullLifecycle:
         assert len(events) == 8
 
     @pytest.mark.asyncio
+    async def test_v1_shortcut_path_to_released(self, escrow_db):
+        """v1 production path: payment_pending -> funds_held -> shipping_requested
+        -> label_generated -> in_transit -> inspection_period -> released.
+
+        Skips the unwired `shipped` and `delivered` states.  Mirrors what the
+        actual production endpoints fire (Aramex create_shipment, seller
+        upload_tracking, buyer mark_delivered, buyer confirm_receipt)."""
+        fsm = _get_fsm()
+        row = await _insert_escrow(escrow_db, state="payment_pending")
+        eid = row["id"]
+        buyer = row["winner_id"]
+        seller = row["seller_id"]
+
+        path = [
+            ("funds_held",         buyer,  "webhook", "webhook.payment_captured"),
+            ("shipping_requested", seller, "system",  "system.funds_confirmed"),
+            ("label_generated",    seller, "seller",  "seller.create_shipment"),
+            ("in_transit",         seller, "seller",  "seller.upload_tracking"),
+            ("inspection_period",  buyer,  "buyer",   "buyer.mark_delivered"),
+            ("released",           buyer,  "buyer",   "buyer.confirm_receipt"),
+        ]
+        for new_state, actor, actor_type, trigger in path:
+            escrow = await fsm.transition_escrow(
+                eid, new_state, actor, actor_type, trigger, {}, escrow_db,
+            )
+        assert escrow.state == "released"
+        events = await _get_events(escrow_db, eid)
+        assert len(events) == 6
+
+    @pytest.mark.asyncio
     async def test_dispute_path_to_resolved_refunded(self, escrow_db):
         """inspection_period -> disputed -> under_review -> resolved_refunded"""
         fsm = _get_fsm()
