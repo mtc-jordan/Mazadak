@@ -1,5 +1,9 @@
 """Auction endpoints — SDD §5.4."""
 
+import json
+import logging
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,12 +13,14 @@ from sqlalchemy import select, or_, func
 from app.core.database import get_db
 from app.core.redis import get_redis
 from app.core.types import UUIDPath
-from app.services.auth.dependencies import get_current_user
+from app.services.auth.dependencies import get_current_user, require_role
 from app.services.auth.models import User
 from app.services.auction import schemas, service
 from app.services.auction.dependencies import check_bid_rate_limit, get_auction_or_404
 from app.services.auction.models import Auction, AuctionStatus
 from app.services.listing.models import Listing
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auctions", tags=["auctions"])
 
@@ -320,3 +326,324 @@ async def list_bids(
         .limit(100)
     )
     return [schemas.BidOut.model_validate(b) for b in result.scalars().all()]
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Admin auction management endpoints
+# ═══════════════════════════════════════════════════════════════
+
+@router.post(
+    "/{auction_id}/pause",
+    dependencies=[Depends(require_role("admin", "superadmin"))],
+)
+async def admin_pause_auction(
+    auction_id: UUIDPath,
+    body: schemas.AdminPauseRequest,
+    user: User = Depends(require_role("admin", "superadmin")),
+    redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pause an active auction. Preserves remaining TTL for resume."""
+    aid = str(auction_id)
+    redis_status = await redis.get(service._k(aid, "status"))
+
+    if redis_status != "ACTIVE":
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "NOT_ACTIVE", "message_en": "Auction is not active"},
+        )
+
+    # Save remaining TTL before pausing
+    remaining_ttl = await redis.ttl(service._root(aid))
+    await redis.set(service._k(aid, "status"), "PAUSED")
+    # Store remaining TTL so we can restore it on resume
+    await redis.set(service._k(aid, "paused_ttl"), str(max(remaining_ttl, 0)))
+    # Remove root key TTL to prevent expiry while paused
+    await redis.persist(service._root(aid))
+
+    # Update DB
+    auction = await db.get(Auction, aid)
+    if auction:
+        auction.status = "paused"
+        await db.commit()
+
+    # Broadcast pause event
+    await redis.publish(f"channel:auction:{aid}", json.dumps({
+        "event": "auction_paused",
+        "payload": {"auction_id": aid, "reason": body.reason},
+    }))
+
+    logger.info("Admin %s paused auction %s: %s", user.id, aid, body.reason)
+    return {"success": True, "message": "Auction paused", "remaining_ttl": remaining_ttl}
+
+
+@router.post(
+    "/{auction_id}/resume",
+    dependencies=[Depends(require_role("admin", "superadmin"))],
+)
+async def admin_resume_auction(
+    auction_id: UUIDPath,
+    body: schemas.AdminResumeRequest,
+    user: User = Depends(require_role("admin", "superadmin")),
+    redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resume a paused auction, optionally extending the time."""
+    aid = str(auction_id)
+    redis_status = await redis.get(service._k(aid, "status"))
+
+    if redis_status != "PAUSED":
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "NOT_PAUSED", "message_en": "Auction is not paused"},
+        )
+
+    # Restore TTL
+    paused_ttl_str = await redis.get(service._k(aid, "paused_ttl"))
+    paused_ttl = int(paused_ttl_str) if paused_ttl_str else 300  # 5 min default
+    new_ttl = paused_ttl + (body.extend_minutes * 60)
+
+    await redis.set(service._k(aid, "status"), "ACTIVE")
+    await redis.set(service._root(aid), "active", ex=new_ttl)
+    await redis.delete(service._k(aid, "paused_ttl"))
+
+    # Update DB
+    auction = await db.get(Auction, aid)
+    if auction:
+        auction.status = AuctionStatus.ACTIVE.value
+        if body.extend_minutes > 0:
+            from datetime import timedelta, datetime, timezone
+            auction.ends_at = datetime.now(timezone.utc) + timedelta(seconds=new_ttl)
+        await db.commit()
+
+    # Broadcast resume event
+    await redis.publish(f"channel:auction:{aid}", json.dumps({
+        "event": "auction_resumed",
+        "payload": {"auction_id": aid, "remaining_seconds": new_ttl},
+    }))
+
+    logger.info("Admin %s resumed auction %s (ttl=%ds)", user.id, aid, new_ttl)
+    return {"success": True, "message": "Auction resumed", "remaining_seconds": new_ttl}
+
+
+@router.post(
+    "/{auction_id}/cancel",
+    dependencies=[Depends(require_role("admin", "superadmin"))],
+)
+async def admin_cancel_auction(
+    auction_id: UUIDPath,
+    body: schemas.AdminCancelRequest,
+    user: User = Depends(require_role("admin", "superadmin")),
+    redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancel an auction. No winner, no escrow. All bids voided."""
+    aid = str(auction_id)
+
+    # Update Redis
+    await redis.set(service._k(aid, "status"), "CANCELLED")
+    await redis.delete(service._root(aid))
+
+    # Update DB
+    auction = await db.get(Auction, aid)
+    if not auction:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND"})
+
+    auction.status = AuctionStatus.CANCELLED.value
+    listing = await db.get(Listing, auction.listing_id)
+    if listing:
+        listing.status = "cancelled"
+    await db.commit()
+
+    # Broadcast cancellation
+    await redis.publish(f"channel:auction:{aid}", json.dumps({
+        "event": "auction_cancelled",
+        "payload": {"auction_id": aid, "reason": body.reason},
+    }))
+
+    # Cleanup Redis keys
+    await service._cleanup_redis_keys(aid, redis)
+
+    logger.info("Admin %s cancelled auction %s: %s", user.id, aid, body.reason)
+    return {"success": True, "message": "Auction cancelled"}
+
+
+@router.post(
+    "/{auction_id}/override",
+    dependencies=[Depends(require_role("admin", "superadmin"))],
+)
+async def admin_override_auction(
+    auction_id: UUIDPath,
+    body: schemas.AdminOverrideRequest,
+    user: User = Depends(require_role("admin", "superadmin")),
+    redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db),
+):
+    """Override auction parameters: extend time, change min increment."""
+    aid = str(auction_id)
+    redis_status = await redis.get(service._k(aid, "status"))
+
+    if redis_status not in ("ACTIVE", "PAUSED"):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "NOT_ACTIVE", "message_en": "Auction must be active or paused"},
+        )
+
+    if body.extend_minutes is None and body.new_min_increment is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "NO_CHANGES", "message_en": "At least one override field required"},
+        )
+
+    changes = {}
+
+    if body.extend_minutes is not None:
+        current_ttl = await redis.ttl(service._root(aid))
+        new_ttl = max(current_ttl, 0) + (body.extend_minutes * 60)
+        await redis.set(service._root(aid), "active", ex=new_ttl)
+        changes["remaining_seconds"] = new_ttl
+
+        auction = await db.get(Auction, aid)
+        if auction:
+            from datetime import timedelta, datetime, timezone
+            auction.ends_at = datetime.now(timezone.utc) + timedelta(seconds=new_ttl)
+            await db.commit()
+
+    if body.new_min_increment is not None:
+        await redis.set(service._k(aid, "min_increment"), str(body.new_min_increment))
+        changes["min_increment"] = body.new_min_increment
+
+        auction = await db.get(Auction, aid)
+        if auction:
+            auction.min_increment = body.new_min_increment
+            await db.commit()
+
+    # Broadcast override event
+    await redis.publish(f"channel:auction:{aid}", json.dumps({
+        "event": "auction_override",
+        "payload": {"auction_id": aid, **changes},
+    }))
+
+    logger.info("Admin %s overrode auction %s: %s", user.id, aid, changes)
+    return {"success": True, "message": "Auction updated", "changes": changes}
+
+
+@router.post(
+    "/emergency-kill",
+    dependencies=[Depends(require_role("superadmin"))],
+)
+async def emergency_kill_switch(
+    body: schemas.EmergencyKillRequest,
+    user: User = Depends(require_role("superadmin")),
+    redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db),
+):
+    """Emergency kill switch: pause ALL active auctions platform-wide.
+
+    Superadmin only. Requires confirm=true as safety guard.
+    Sets a global Redis flag that prevents new bids and pauses all auctions.
+    """
+    if not body.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "CONFIRM_REQUIRED", "message_en": "Set confirm=true to execute kill switch"},
+        )
+
+    # Set global kill switch flag in Redis
+    await redis.set("platform:kill_switch", "1")
+    await redis.set("platform:kill_switch:reason", body.reason)
+    await redis.set("platform:kill_switch:by", str(user.id))
+
+    # Find all active auctions and pause them
+    result = await db.execute(
+        select(Auction).where(Auction.status == AuctionStatus.ACTIVE.value)
+    )
+    active_auctions = result.scalars().all()
+    paused_count = 0
+
+    for auction in active_auctions:
+        aid = auction.id
+        redis_status = await redis.get(service._k(aid, "status"))
+        if redis_status == "ACTIVE":
+            remaining_ttl = await redis.ttl(service._root(aid))
+            await redis.set(service._k(aid, "status"), "PAUSED")
+            await redis.set(service._k(aid, "paused_ttl"), str(max(remaining_ttl, 0)))
+            await redis.persist(service._root(aid))
+
+            # Broadcast pause
+            await redis.publish(f"channel:auction:{aid}", json.dumps({
+                "event": "auction_paused",
+                "payload": {"auction_id": aid, "reason": f"Emergency: {body.reason}"},
+            }))
+
+        auction.status = "paused"
+        paused_count += 1
+
+    await db.commit()
+
+    logger.critical(
+        "EMERGENCY KILL SWITCH activated by %s: %s — %d auctions paused",
+        user.id, body.reason, paused_count,
+    )
+    return {
+        "success": True,
+        "message": f"Emergency kill switch activated. {paused_count} auctions paused.",
+        "paused_count": paused_count,
+    }
+
+
+@router.post(
+    "/emergency-resume",
+    dependencies=[Depends(require_role("superadmin"))],
+)
+async def emergency_resume(
+    user: User = Depends(require_role("superadmin")),
+    redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lift the emergency kill switch and resume all paused auctions."""
+    kill_active = await redis.get("platform:kill_switch")
+    if kill_active != "1":
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "NOT_ACTIVE", "message_en": "Kill switch is not active"},
+        )
+
+    # Clear kill switch flag
+    await redis.delete("platform:kill_switch", "platform:kill_switch:reason", "platform:kill_switch:by")
+
+    # Resume all paused auctions
+    result = await db.execute(
+        select(Auction).where(Auction.status == "paused")
+    )
+    paused_auctions = result.scalars().all()
+    resumed_count = 0
+
+    for auction in paused_auctions:
+        aid = auction.id
+        paused_ttl_str = await redis.get(service._k(aid, "paused_ttl"))
+        paused_ttl = int(paused_ttl_str) if paused_ttl_str else 300
+
+        await redis.set(service._k(aid, "status"), "ACTIVE")
+        await redis.set(service._root(aid), "active", ex=paused_ttl)
+        await redis.delete(service._k(aid, "paused_ttl"))
+
+        auction.status = AuctionStatus.ACTIVE.value
+        resumed_count += 1
+
+        await redis.publish(f"channel:auction:{aid}", json.dumps({
+            "event": "auction_resumed",
+            "payload": {"auction_id": aid, "remaining_seconds": paused_ttl},
+        }))
+
+    await db.commit()
+
+    logger.info(
+        "Emergency kill switch lifted by %s — %d auctions resumed",
+        user.id, resumed_count,
+    )
+    return {
+        "success": True,
+        "message": f"Kill switch lifted. {resumed_count} auctions resumed.",
+        "resumed_count": resumed_count,
+    }

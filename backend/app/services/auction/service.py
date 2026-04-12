@@ -49,7 +49,7 @@ def _root(auction_id: str | UUID) -> str:
 ALL_SUFFIXES = (
     "price", "status", "seller", "last_bidder", "bid_count",
     "extension_ct", "watcher_ct", "min_increment", "reserve",
-    "banned_set",
+    "banned_set", "buy_now",
 )
 
 
@@ -123,6 +123,7 @@ async def initialize_auction(
     pipe.set(_k(aid, "watcher_ct"), "0")
     pipe.set(_k(aid, "min_increment"), str(listing.min_increment))
     pipe.set(_k(aid, "reserve"), str(listing.reserve_price or 0))
+    pipe.set(_k(aid, "buy_now"), str(listing.buy_it_now_price or 0))
     # Root key with TTL — keyspace notification fires on expiry
     pipe.set(_root(aid), "active", ex=ttl)
     await pipe.execute()
@@ -384,10 +385,11 @@ async def get_auction_state(
     pipe.get(_k(aid, "watcher_ct"))
     pipe.get(_k(aid, "min_increment"))
     pipe.get(_k(aid, "reserve"))
+    pipe.get(_k(aid, "buy_now"))
     pipe.ttl(_root(aid))
     results = await pipe.execute()
 
-    price, status, seller, last_bidder, bid_count, ext_ct, watcher_ct, min_inc, reserve, ttl = results
+    price, status, seller, last_bidder, bid_count, ext_ct, watcher_ct, min_inc, reserve, buy_now, ttl = results
 
     if status is not None:
         return {
@@ -401,6 +403,7 @@ async def get_auction_state(
             "watcher_count": int(watcher_ct) if watcher_ct else 0,
             "min_increment": int(min_inc) if min_inc else 0,
             "reserve_price": int(reserve) if reserve else 0,
+            "buy_now_price": int(buy_now) if buy_now else 0,
             "ttl_seconds": max(0, ttl) if ttl and ttl > 0 else 0,
         }
 
@@ -511,6 +514,21 @@ async def execute_proxy_bids(
     if next_bid > int(proxy.max_amount):
         proxy.is_active = False
         await db.commit()
+        # Notify user their proxy bid was exhausted
+        try:
+            from app.tasks.notification import send_notification
+            send_notification.delay(
+                event="proxy_bid_exhausted",
+                user_id=proxy.user_id,
+                auction_id=auction_id,
+                data={
+                    "max_amount": round(int(proxy.max_amount) / 100, 2),
+                    "current_price": round(current_amount / 100, 2),
+                    "min_to_win": round(next_bid / 100, 2),
+                },
+            )
+        except Exception:
+            logger.warning("Failed to notify proxy exhaustion: auction=%s user=%s", auction_id, proxy.user_id)
         return None
 
     result = await place_bid(auction_id, proxy.user_id, next_bid, redis)

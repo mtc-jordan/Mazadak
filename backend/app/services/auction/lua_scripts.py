@@ -18,6 +18,7 @@ Redis key schema (individual keys per auction field):
   KEYS[7] = auction:{id}               — root TTL key (keyspace expiry)
   KEYS[8] = auction:{id}:extension_ct  — anti-snipe extension count
   KEYS[9] = auction:{id}:min_increment — min bid increment (integer cents)
+  KEYS[10] = auction:{id}:buy_now      — Buy It Now price (0 = disabled)
 
   ARGV[1] = bid_amount   (integer cents as string)
   ARGV[2] = bidder_id    (user_id string)
@@ -42,6 +43,7 @@ class BidResult:
     accepted: bool
     new_price: int = 0
     extended: bool = False
+    buy_now: bool = False
     new_ttl: Optional[int] = None
     rejection_reason: Optional[str] = None
     min_required: Optional[int] = None
@@ -59,7 +61,7 @@ class BidResult:
 # Anti-snipe: if root key TTL <= 180s, extend by 180s, INCR extension_ct.
 #
 # Returns:
-#   ACCEPTED: {'ACCEPTED', bid_amount, 'EXTENDED'|'NORMAL', ttl}
+#   ACCEPTED: {'ACCEPTED', bid_amount, 'EXTENDED'|'NORMAL'|'BUY_NOW', ttl}
 #   REJECTED: {'REJECTED', reason}  or  {'REJECTED', 'BID_TOO_LOW', min_bid}
 
 BID_VALIDATION_SCRIPT = """
@@ -71,6 +73,7 @@ local bids_key     = KEYS[5]  -- auction:{id}:bid_count
 local banned_key   = KEYS[6]  -- auction:{id}:banned_set
 local ttl_key      = KEYS[7]  -- auction:{id} (root key with TTL)
 local ext_key      = KEYS[8]  -- auction:{id}:extension_ct
+local buy_now_key  = KEYS[10] -- auction:{id}:buy_now
 
 local bid_amount  = tonumber(ARGV[1])
 local bidder_id   = ARGV[2]
@@ -105,6 +108,16 @@ end
 redis.call('SET', price_key, bid_amount)
 redis.call('SET', last_key, bidder_id)
 redis.call('INCR', bids_key)
+
+-- Buy It Now: if bid >= BIN price, end auction immediately
+local buy_now_price = tonumber(redis.call('GET', buy_now_key) or '0')
+if buy_now_price and buy_now_price > 0 and bid_amount >= buy_now_price then
+  redis.call('SET', status_key, 'ENDED')
+  -- Remove root key TTL to prevent expiry handler from re-firing
+  redis.call('DEL', ttl_key)
+  local ttl = 0
+  return {'ACCEPTED', tostring(bid_amount), 'BUY_NOW', tostring(ttl)}
+end
 
 -- Anti-snipe: if TTL <= 180s, extend by 180s
 local ttl = redis.call('TTL', ttl_key)
@@ -170,6 +183,7 @@ class BidLuaScripts:
             f"auction:{auction_id}",               # KEYS[7] — root TTL key
             f"auction:{auction_id}:extension_ct",  # KEYS[8]
             f"auction:{auction_id}:min_increment", # KEYS[9]
+            f"auction:{auction_id}:buy_now",       # KEYS[10]
         ]
         args = [str(bid_amount), bidder_id]
 
@@ -205,10 +219,12 @@ class BidLuaScripts:
         status = _decode(result[0])
 
         if status == "ACCEPTED":
+            flag = _decode(result[2]) if len(result) > 2 else "NORMAL"
             return BidResult(
                 accepted=True,
                 new_price=int(result[1]),
-                extended=_decode(result[2]) == "EXTENDED",
+                extended=flag == "EXTENDED",
+                buy_now=flag == "BUY_NOW",
                 new_ttl=int(result[3]) if len(result) > 3 else None,
             )
         else:

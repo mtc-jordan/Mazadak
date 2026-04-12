@@ -121,3 +121,28 @@ class AuctionRoomState(BaseModel):
     watcher_count: int
     extension_count: int
     last_bidder: str | None = None
+
+
+# ── Admin schemas ───────────────────────────────────────────
+
+class AdminPauseRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500)
+
+
+class AdminResumeRequest(BaseModel):
+    extend_minutes: int = Field(default=0, ge=0, le=1440)
+
+
+class AdminCancelRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500)
+
+
+class AdminOverrideRequest(BaseModel):
+    """Override auction parameters (all optional, at least one required)."""
+    extend_minutes: int | None = Field(default=None, ge=1, le=1440)
+    new_min_increment: int | None = Field(default=None, ge=100)  # cents
+
+
+class EmergencyKillRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500)
+    confirm: bool = Field(..., description="Must be true to confirm kill switch")

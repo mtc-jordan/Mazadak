@@ -104,7 +104,10 @@ async def _build_current_state(auction_id: str, redis) -> dict | None:
     ext_ct = await redis.get(_k(auction_id, "extension_ct"))
     last_bidder = await redis.get(_k(auction_id, "last_bidder"))
     min_inc = await redis.get(_k(auction_id, "min_increment"))
+    buy_now = await redis.get(_k(auction_id, "buy_now"))
     root_ttl = await redis.ttl(_root(auction_id))
+
+    buy_now_val = int(buy_now) if buy_now else 0
 
     return {
         "auction_id": auction_id,
@@ -115,6 +118,7 @@ async def _build_current_state(auction_id: str, redis) -> dict | None:
         "extension_count": int(ext_ct) if ext_ct else 0,
         "last_bidder": mask_user_id(last_bidder) if last_bidder else None,
         "min_increment": _cents_to_jod(int(min_inc)) if min_inc else 0,
+        "buy_now_price": _cents_to_jod(buy_now_val) if buy_now_val > 0 else None,
         "remaining_seconds": root_ttl if root_ttl > 0 else 0,
     }
 
@@ -336,13 +340,16 @@ class AuctionNamespace(socketio.AsyncNamespace):
         price_jod = _cents_to_jod(result.new_price)
 
         # 1. bid_confirmed to submitting socket only
-        await self.emit("bid_confirmed", {
+        confirmed_payload = {
             "auction_id": auction_id,
             "amount": price_jod,
             "bid_count": bid_count,
             "currency": "JOD",
             "timestamp": time.time(),
-        }, to=sid)
+        }
+        if result.buy_now:
+            confirmed_payload["buy_now"] = True
+        await self.emit("bid_confirmed", confirmed_payload, to=sid)
 
         # 2. PUBLISH bid_update to Redis channel (cross-instance fan-out)
         bid_payload = {
@@ -353,6 +360,8 @@ class AuctionNamespace(socketio.AsyncNamespace):
             "currency": "JOD",
             "timestamp": time.time(),
         }
+        if result.buy_now:
+            bid_payload["buy_now"] = True
         await redis.publish(_channel(auction_id), json.dumps({
             "event": "bid_update",
             "payload": bid_payload,
@@ -365,7 +374,32 @@ class AuctionNamespace(socketio.AsyncNamespace):
         except Exception:
             logger.warning("Failed to queue bid persistence for auction=%s", auction_id)
 
-        # 4. Anti-snipe handled atomically inside Lua script
+        # 4. Buy It Now — auction ended atomically in Lua, finalize in DB
+        if result.buy_now:
+            logger.info(
+                "BUY_NOW triggered: auction=%s buyer=%s price=%d",
+                auction_id, user_id, result.new_price,
+            )
+            # Publish auction_ended event
+            await redis.publish(_channel(auction_id), json.dumps({
+                "event": "auction_ended",
+                "payload": {
+                    "auction_id": auction_id,
+                    "winner_id": mask_user_id(user_id),
+                    "final_price": price_jod,
+                    "bid_count": bid_count,
+                    "outcome": "buy_now",
+                },
+            }))
+            # Queue Celery task to finalize in DB (escrow, notifications, cleanup)
+            try:
+                from app.tasks.auction import finalize_buy_now
+                finalize_buy_now.delay(auction_id, user_id, result.new_price)
+            except Exception:
+                logger.exception("Failed to queue finalize_buy_now for auction=%s", auction_id)
+            return
+
+        # 5. Anti-snipe handled atomically inside Lua script
         if result.extended:
             ext_ct_str = await redis.get(_k(auction_id, "extension_ct"))
             ext_count = int(ext_ct_str) if ext_ct_str else 0
