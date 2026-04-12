@@ -155,9 +155,9 @@ async def admin_create_room(
     return await service.build_admin_room_detail(full, db)
 
 
-@admin_router.get("/{room_id}", response_model=AdminRoomDetail)
+@admin_router.get("/{tender_id}", response_model=AdminRoomDetail)
 async def admin_get_room(
-    room_id: UUIDPath,
+    tender_id: UUIDPath,
     room: B2BRoom = Depends(get_tender_or_404),
     _admin_user: User = Depends(_admin),
     db: AsyncSession = Depends(get_db),
@@ -165,9 +165,9 @@ async def admin_get_room(
     return await service.build_admin_room_detail(room, db)
 
 
-@admin_router.patch("/{room_id}", response_model=AdminRoomDetail)
+@admin_router.patch("/{tender_id}", response_model=AdminRoomDetail)
 async def admin_update_room(
-    room_id: UUIDPath,
+    tender_id: UUIDPath,
     body: RoomUpdateRequest,
     room: B2BRoom = Depends(get_tender_or_404),
     admin: User = Depends(_admin),
@@ -178,9 +178,9 @@ async def admin_update_room(
     return await service.build_admin_room_detail(full, db)
 
 
-@admin_router.post("/{room_id}/invite", status_code=status.HTTP_201_CREATED)
+@admin_router.post("/{tender_id}/invite", status_code=status.HTTP_201_CREATED)
 async def admin_invite_bidders(
-    room_id: UUIDPath,
+    tender_id: UUIDPath,
     body: InviteBiddersRequest,
     room: B2BRoom = Depends(get_tender_or_404),
     admin: User = Depends(_admin),
@@ -190,9 +190,9 @@ async def admin_invite_bidders(
     return {"created": len(created), "invitation_ids": [i.id for i in created]}
 
 
-@admin_router.delete("/{room_id}/invitations/{invitation_id}")
+@admin_router.delete("/{tender_id}/invitations/{invitation_id}")
 async def admin_revoke_invitation(
-    room_id: UUIDPath,
+    tender_id: UUIDPath,
     invitation_id: UUIDPath,
     room: B2BRoom = Depends(get_tender_or_404),
     admin: User = Depends(_admin),
@@ -208,9 +208,9 @@ async def admin_revoke_invitation(
     return {"invitation_id": inv.id, "status": inv.status}
 
 
-@admin_router.post("/{room_id}/announce", response_model=AdminRoomDetail)
+@admin_router.post("/{tender_id}/announce", response_model=AdminRoomDetail)
 async def admin_announce_results(
-    room_id: UUIDPath,
+    tender_id: UUIDPath,
     body: AnnounceResultsRequest,
     room: B2BRoom = Depends(get_tender_or_404),
     admin: User = Depends(_admin),
@@ -233,9 +233,9 @@ async def admin_announce_results(
     return await service.build_admin_room_detail(full, db)
 
 
-@admin_router.get("/{room_id}/analytics", response_model=RoomAnalytics)
+@admin_router.get("/{tender_id}/analytics", response_model=RoomAnalytics)
 async def admin_room_analytics(
-    room_id: UUIDPath,
+    tender_id: UUIDPath,
     room: B2BRoom = Depends(get_tender_or_404),
     _admin_user: User = Depends(_admin),
     db: AsyncSession = Depends(get_db),
@@ -243,9 +243,9 @@ async def admin_room_analytics(
     return await service.get_room_analytics(room, db)
 
 
-@admin_router.get("/{room_id}/export/compliance-pdf")
+@admin_router.get("/{tender_id}/export/compliance-pdf")
 async def admin_export_compliance_pdf(
-    room_id: UUIDPath,
+    tender_id: UUIDPath,
     room: B2BRoom = Depends(get_tender_or_404),
     _admin_user: User = Depends(_admin),
     db: AsyncSession = Depends(get_db),
@@ -259,9 +259,9 @@ async def admin_export_compliance_pdf(
     )
 
 
-@admin_router.get("/{room_id}/export/award-letter/{bid_id}")
+@admin_router.get("/{tender_id}/export/award-letter/{bid_id}")
 async def admin_export_award_letter(
-    room_id: UUIDPath,
+    tender_id: UUIDPath,
     bid_id: UUIDPath,
     room: B2BRoom = Depends(get_tender_or_404),
     _admin_user: User = Depends(_admin),

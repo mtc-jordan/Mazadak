@@ -3,9 +3,15 @@ FROM python:3.12-slim AS base
 WORKDIR /app
 ENV PYTHONPATH=/app
 
-# System deps for asyncpg, Pillow, imagehash, and healthcheck curl
+# System deps:
+#   - build-essential, libpq-dev: asyncpg, Pillow, imagehash
+#   - curl: healthcheck
+#   - libpango-1.0-0, libpangoft2-1.0-0, libharfbuzz0b, libfontconfig1,
+#     libcairo2, libgdk-pixbuf-2.0-0: WeasyPrint (B2B compliance PDFs)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libpq-dev curl \
+    libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
+    libfontconfig1 libcairo2 libgdk-pixbuf-2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python deps first (layer caching)

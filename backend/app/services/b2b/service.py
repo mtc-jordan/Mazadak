@@ -846,10 +846,15 @@ async def import_csv(
             sealed_raw = (row.get("sealed") or "true").strip().lower()
             sealed = sealed_raw in ("true", "1", "yes", "y")
 
+            client_name = (row.get("client_name") or "").strip()
+            tender_reference = (row.get("tender_reference") or "").strip()
+            if not client_name or not tender_reference:
+                raise ValueError("client_name and tender_reference are required")
+
             room = B2BRoom(
                 id=str(uuid4()),
-                client_name=(row.get("client_name") or "").strip(),
-                tender_reference=(row.get("tender_reference") or "").strip(),
+                client_name=client_name,
+                tender_reference=tender_reference,
                 description=(row.get("description") or None),
                 submission_deadline=deadline,
                 sealed=sealed,
@@ -859,14 +864,15 @@ async def import_csv(
                 status=B2BRoomStatus.OPEN.value,
                 created_by=admin.id,
             )
-            if not room.client_name or not room.tender_reference:
-                raise ValueError("client_name and tender_reference are required")
 
-            db.add(room)
-            await db.flush()
+            # Savepoint so a failing INSERT (e.g. unique violation) rolls
+            # back this row only, leaving the outer session usable for
+            # subsequent rows.
+            async with db.begin_nested():
+                db.add(room)
+                await db.flush()
             created_ids.append(room.id)
         except Exception as exc:
-            await db.rollback()
             errors.append(f"row {idx}: {exc}")
 
     if created_ids:
