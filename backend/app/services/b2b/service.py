@@ -457,14 +457,6 @@ async def submit_bid(
 
     await db.commit()
     await db.refresh(bid)
-
-    # Dispatch confirmation notification (best-effort)
-    try:
-        from app.tasks.notification import send_b2b_bid_confirmation
-        send_b2b_bid_confirmation.delay(room.id, bid.id)
-    except Exception:
-        logger.debug("b2b bid confirmation notification dispatch skipped")
-
     return bid
 
 

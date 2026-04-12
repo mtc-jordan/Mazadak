@@ -370,7 +370,7 @@ function RulingTab({
   onSubmit: () => void;
 }) {
   const [outcome, setOutcome] = useState<DisputeOutcome>("full_refund");
-  const [reasonCode, setReasonCode] = useState(
+  const [reasonCode, setReasonCode] = useState<string>(
     DISPUTE_REASON_CODES[0].code
   );
   const [reasonText, setReasonText] = useState("");

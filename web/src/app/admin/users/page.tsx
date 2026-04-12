@@ -34,7 +34,7 @@ export default function UsersPage() {
   const [searching, setSearching] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [userLoading, setUserLoading] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Dialog
   const [dialog, setDialog] = useState<{

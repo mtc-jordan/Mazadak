@@ -195,14 +195,15 @@ async def test_bid_accepted_sends_confirmation(db_session, fake_redis):
     mock_result = BidResult(accepted=True, new_price=50000, extended=False)
     mock_listing = {"auction_id": "AUCTION1", "title_ar": "آيفون 15", "title_en": "iPhone 15"}
 
+    _mock_insert_bid.reset_mock()
+    _mock_insert_bid.delay = MagicMock()
+
     with (
         patch("app.services.bot.service.send_whatsapp_reply", side_effect=capture_reply),
         patch.object(BidLuaScripts, "validate_bid", return_value=mock_result),
         patch("app.services.bot.service._search_active_listing", return_value=mock_listing),
+        patch("app.tasks.auction.insert_bid_to_db", _mock_insert_bid),
     ):
-        _mock_insert_bid.reset_mock()
-        _mock_insert_bid.delay = MagicMock()
-
         from app.services.bot.service import process_whatsapp_message
         await process_whatsapp_message(
             message=_msg("962790000001", "msg-bid-001", "بزيد 500 #AUCTION1"),
@@ -306,14 +307,15 @@ async def test_rate_limiting_5_bids_per_minute(db_session, fake_redis):
     mock_result = BidResult(accepted=True, new_price=50000, extended=False)
     mock_listing = {"auction_id": "AUCTION3", "title_ar": "ساعة", "title_en": "Watch"}
 
+    _mock_insert_bid.reset_mock()
+    _mock_insert_bid.delay = MagicMock()
+
     with (
         patch("app.services.bot.service.send_whatsapp_reply", side_effect=capture_reply),
         patch.object(BidLuaScripts, "validate_bid", return_value=mock_result),
         patch("app.services.bot.service._search_active_listing", return_value=mock_listing),
+        patch("app.tasks.auction.insert_bid_to_db", _mock_insert_bid),
     ):
-        _mock_insert_bid.reset_mock()
-        _mock_insert_bid.delay = MagicMock()
-
         from app.services.bot.service import process_whatsapp_message
 
         for i in range(6):
