@@ -22,7 +22,7 @@ def upgrade() -> None:
     op.create_table(
         "dispute_messages",
         sa.Column("id", sa.UUID, primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("dispute_id", sa.UUID, nullable=False, index=True),
+        sa.Column("dispute_id", sa.UUID, nullable=False),
         sa.Column("sender_id", sa.UUID, nullable=False),
         sa.Column("sender_role", sa.String(10), nullable=False),
         sa.Column("body", sa.Text, nullable=False),

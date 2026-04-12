@@ -156,8 +156,15 @@ class TestGetCurrentUser:
     async def test_tampered_jwt_returns_401(self, client, db_session):
         user = await _create_user(db_session)
         token, _ = _make_token(user.id)
-        # Tamper by flipping a character in the signature
-        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        # Tamper the signature: flip a character in the MIDDLE of the
+        # signature segment, not the last char.  The last base64url char
+        # of an RS256 signature only encodes 2 meaningful bits (the rest
+        # are padding), so flipping it may leave the decoded bytes
+        # unchanged and the signature would still verify.
+        head, _, sig = token.rpartition(".")
+        mid = len(sig) // 2
+        flipped = "B" if sig[mid] != "B" else "C"
+        tampered = f"{head}.{sig[:mid]}{flipped}{sig[mid + 1:]}"
 
         resp = await client.post(
             "/api/v1/auth/logout",
