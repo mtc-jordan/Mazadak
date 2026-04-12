@@ -1,6 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mzadak/l10n/app_localizations.dart';
 
 import '../../core/l10n/arabic_numerals.dart';
 import '../../core/providers/auction_provider.dart';
@@ -158,9 +159,9 @@ class _AuctionRoomScreenState extends ConsumerState<AuctionRoomScreen>
                               const Icon(Icons.history_rounded,
                                   size: 16, color: AppColors.mist),
                               const SizedBox(width: AppSpacing.xxs),
-                              const Text(
-                                'سجل المزايدات',
-                                style: TextStyle(
+                              Text(
+                                S.of(context).bidHistory,
+                                style: const TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w600,
                                   color: AppColors.navy,
@@ -644,14 +645,14 @@ class _StatsRow extends StatelessWidget {
         _StatChip(
           icon: Icons.gavel_rounded,
           value: auction.bidCount,
-          label: 'مزايدة',
+          label: S.of(context).bidTab,
           color: AppColors.navy,
         ),
         const SizedBox(width: AppSpacing.md),
         _StatChip(
           icon: Icons.visibility_rounded,
           value: auction.watcherCount,
-          label: 'مشاهد',
+          label: S.of(context).viewersTab,
           color: AppColors.emerald,
         ),
         if (auction.extensionCount > 0) ...[
@@ -659,7 +660,7 @@ class _StatsRow extends StatelessWidget {
           _StatChip(
             icon: Icons.update_rounded,
             value: auction.extensionCount,
-            label: 'تمديد',
+            label: S.of(context).extensionTab,
             color: AppColors.gold,
           ),
         ],

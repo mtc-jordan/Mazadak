@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mzadak/l10n/app_localizations.dart';
 
 import '../../../core/theme/animations.dart';
 import '../../../core/theme/colors.dart';
@@ -30,12 +31,12 @@ class EscrowProgressTracker extends StatefulWidget {
 
 class _EscrowProgressTrackerState extends State<EscrowProgressTracker>
     with TickerProviderStateMixin {
-  static const _steps = [
-    _StepInfo(icon: Icons.payment_rounded, label: 'الدفع'),
-    _StepInfo(icon: Icons.local_shipping_rounded, label: 'الشحن'),
-    _StepInfo(icon: Icons.flight_rounded, label: 'في الطريق'),
-    _StepInfo(icon: Icons.inventory_2_rounded, label: 'التسليم'),
-    _StepInfo(icon: Icons.check_circle_rounded, label: 'الإفراج'),
+  static List<_StepInfo> _steps(BuildContext context) => [
+    _StepInfo(icon: Icons.payment_rounded, label: S.of(context).paymentStep),
+    _StepInfo(icon: Icons.local_shipping_rounded, label: S.of(context).shippingStep),
+    _StepInfo(icon: Icons.flight_rounded, label: S.of(context).inTransitStep),
+    _StepInfo(icon: Icons.inventory_2_rounded, label: S.of(context).deliveryStep),
+    _StepInfo(icon: Icons.check_circle_rounded, label: S.of(context).releaseStep),
   ];
 
   // ── Staggered scale-in for each step node ──────────────────────
@@ -59,7 +60,7 @@ class _EscrowProgressTrackerState extends State<EscrowProgressTracker>
 
   void _buildAnimations() {
     // Scale-in controllers for each of the 5 steps
-    for (var i = 0; i < _steps.length; i++) {
+    for (var i = 0; i < 5; i++) {
       final controller = AnimationController(
         vsync: this,
         duration: const Duration(milliseconds: 300),
@@ -75,7 +76,7 @@ class _EscrowProgressTrackerState extends State<EscrowProgressTracker>
     }
 
     // Line draw controllers for the 4 connectors between steps
-    for (var i = 0; i < _steps.length - 1; i++) {
+    for (var i = 0; i < 4; i++) {
       final controller = AnimationController(
         vsync: this,
         duration: const Duration(milliseconds: 250),
@@ -109,7 +110,7 @@ class _EscrowProgressTrackerState extends State<EscrowProgressTracker>
 
   /// Stagger: 80ms offset per step node, then draw completed lines.
   Future<void> _startStaggeredEntry() async {
-    for (var i = 0; i < _steps.length; i++) {
+    for (var i = 0; i < 5; i++) {
       if (!mounted) return;
       _scaleControllers[i].forward();
 
@@ -118,7 +119,7 @@ class _EscrowProgressTrackerState extends State<EscrowProgressTracker>
         _lineControllers[i - 1].forward();
       }
 
-      if (i < _steps.length - 1) {
+      if (i < 4) {
         await Future.delayed(const Duration(milliseconds: 80));
       }
     }
@@ -152,10 +153,11 @@ class _EscrowProgressTrackerState extends State<EscrowProgressTracker>
 
   @override
   Widget build(BuildContext context) {
+    final steps = _steps(context);
     return Padding(
       padding: AppSpacing.horizontalMd,
       child: Row(
-        children: List.generate(_steps.length * 2 - 1, (i) {
+        children: List.generate(steps.length * 2 - 1, (i) {
           if (i.isOdd) {
             // Connector line between steps
             final lineIndex = i ~/ 2;
@@ -179,7 +181,7 @@ class _EscrowProgressTrackerState extends State<EscrowProgressTracker>
           }
 
           final stepIndex = i ~/ 2;
-          final step = _steps[stepIndex];
+          final step = steps[stepIndex];
           final isCompleted = stepIndex < widget.currentStep;
           final isActive = stepIndex == widget.currentStep;
 

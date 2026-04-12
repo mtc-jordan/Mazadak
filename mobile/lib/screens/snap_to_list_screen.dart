@@ -13,6 +13,7 @@ import '../core/theme/animations.dart';
 import '../core/theme/colors.dart';
 import '../core/theme/haptics.dart';
 import '../core/theme/spacing.dart';
+import '../l10n/app_localizations.dart';
 
 // ═══════════════════════════════════════════════════════════════════════
 //  Snap-to-List Screen — AI pipeline progress UI
@@ -39,38 +40,43 @@ class _PipelineStep {
   final IconData icon;
 }
 
-const _steps = [
-  _PipelineStep(
-    id: 'clip',
-    label: 'تحليل الصور',
-    sublabel: 'CLIP ViT-B/32 — كشف المنتج والحالة',
-    icon: Icons.image_search_rounded,
-  ),
-  _PipelineStep(
-    id: 'brand',
-    label: 'كشف العلامة التجارية',
-    sublabel: 'Brand Detection — OCR + مطابقة',
-    icon: Icons.branding_watermark_rounded,
-  ),
-  _PipelineStep(
-    id: 'gpt',
-    label: 'كتابة القائمة',
-    sublabel: 'GPT-4o — عربي + إنجليزي',
-    icon: Icons.auto_awesome_rounded,
-  ),
-  _PipelineStep(
-    id: 'price',
-    label: 'تقدير السعر',
-    sublabel: 'Price Oracle — XGBoost',
-    icon: Icons.price_change_rounded,
-  ),
-  _PipelineStep(
-    id: 'moderation',
-    label: 'مراجعة المحتوى',
-    sublabel: 'Content Moderation — فلترة تلقائية',
-    icon: Icons.verified_user_rounded,
-  ),
-];
+const _stepCount = 5;
+
+List<_PipelineStep> _buildSteps(BuildContext context) {
+  final l = S.of(context);
+  return [
+    _PipelineStep(
+      id: 'clip',
+      label: l.photoAnalysis,
+      sublabel: 'CLIP ViT-B/32 — ${l.brandConditionDetection}',
+      icon: Icons.image_search_rounded,
+    ),
+    _PipelineStep(
+      id: 'brand',
+      label: l.brandConditionDetection,
+      sublabel: 'Brand Detection — OCR',
+      icon: Icons.branding_watermark_rounded,
+    ),
+    _PipelineStep(
+      id: 'gpt',
+      label: l.generateListing,
+      sublabel: l.gpt4oArabicEnglish,
+      icon: Icons.auto_awesome_rounded,
+    ),
+    _PipelineStep(
+      id: 'price',
+      label: l.priceEstimation,
+      sublabel: 'Price Oracle — XGBoost',
+      icon: Icons.price_change_rounded,
+    ),
+    _PipelineStep(
+      id: 'moderation',
+      label: l.productClassification,
+      sublabel: 'Content Moderation',
+      icon: Icons.verified_user_rounded,
+    ),
+  ];
+}
 
 enum _StepState { pending, running, done }
 
@@ -141,7 +147,7 @@ class _SnapToListScreenState extends ConsumerState<SnapToListScreen>
 
   // ── Pipeline state ─────────────────────────────────────────────
   int _currentStepIndex = -1;
-  final _stepStates = List.filled(_steps.length, _StepState.pending);
+  final _stepStates = List.filled(_stepCount, _StepState.pending);
   bool _allDone = false;
   String? _error;
   SnapResult? _result;
@@ -199,7 +205,7 @@ class _SnapToListScreenState extends ConsumerState<SnapToListScreen>
     _pulseController.repeat(reverse: true);
 
     // Done checkmark elasticOut per step
-    for (var i = 0; i < _steps.length; i++) {
+    for (var i = 0; i < _stepCount; i++) {
       final c = AnimationController(
         vsync: this,
         duration: const Duration(milliseconds: 500),
@@ -213,7 +219,7 @@ class _SnapToListScreenState extends ConsumerState<SnapToListScreen>
     }
 
     // Connecting line controllers
-    for (var i = 0; i < _steps.length - 1; i++) {
+    for (var i = 0; i < _stepCount - 1; i++) {
       final c = AnimationController(
         vsync: this,
         duration: const Duration(milliseconds: 400),
@@ -328,14 +334,14 @@ class _SnapToListScreenState extends ConsumerState<SnapToListScreen>
   void _showPermissionDialog() {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('إذن مطلوب'),
+      builder: (ctx) => AlertDialog(
+        title: Text(S.of(ctx).permissionRequired),
         content: const Text(
             'يرجى السماح بالوصول إلى الكاميرا أو المعرض من إعدادات التطبيق.'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('حسنًا'),
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(S.of(ctx).ok),
           ),
         ],
       ),
@@ -424,7 +430,7 @@ class _SnapToListScreenState extends ConsumerState<SnapToListScreen>
         _elapsedTicker?.cancel();
 
         // Complete remaining steps as done visually
-        for (var i = 0; i < _steps.length; i++) {
+        for (var i = 0; i < _stepCount; i++) {
           if (_stepStates[i] != _StepState.done) {
             _stepStates[i] = _StepState.done;
             _doneControllers[i].forward();
@@ -475,7 +481,7 @@ class _SnapToListScreenState extends ConsumerState<SnapToListScreen>
 
   /// Animate pipeline steps sequentially while the API call is in progress.
   Future<void> _animateSteps() async {
-    for (var i = 0; i < _steps.length; i++) {
+    for (var i = 0; i < _stepCount; i++) {
       if (!mounted) return;
 
       setState(() {
@@ -485,7 +491,7 @@ class _SnapToListScreenState extends ConsumerState<SnapToListScreen>
 
       // Animate progress bar: 20% per step
       _progressController.animateTo(
-        (i + 0.5) / _steps.length,
+        (i + 0.5) / _stepCount,
         duration: const Duration(milliseconds: 500),
         curve: Curves.easeOut,
       );
@@ -507,12 +513,12 @@ class _SnapToListScreenState extends ConsumerState<SnapToListScreen>
 
       // Update progress to step end
       _progressController.animateTo(
-        (i + 1) / _steps.length,
+        (i + 1) / _stepCount,
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
       );
 
-      if (i < _steps.length - 1) {
+      if (i < _stepCount - 1) {
         await Future.delayed(const Duration(milliseconds: 150));
       }
     }
@@ -662,7 +668,7 @@ class _SnapToListScreenState extends ConsumerState<SnapToListScreen>
                   setState(() => _startPrice = val);
                   Navigator.pop(context);
                 },
-                child: const Text('تأكيد'),
+                child: Text(S.of(context).confirm),
               ),
             ),
           ],
@@ -947,13 +953,14 @@ class _SnapToListScreenState extends ConsumerState<SnapToListScreen>
         Expanded(
           child: ListView.builder(
             padding: AppSpacing.allMd,
-            itemCount: _steps.length +
+            itemCount: _stepCount +
                 (_result != null ? 1 : 0) +
                 (_error != null ? 1 : 0),
-            itemBuilder: (_, i) {
-              if (i < _steps.length) {
+            itemBuilder: (context, i) {
+              final steps = _buildSteps(context);
+              if (i < _stepCount) {
                 return _StepTile(
-                  step: _steps[i],
+                  step: steps[i],
                   state: _stepStates[i],
                   doneScale: _doneScales[i],
                   pulseScale: _pulseScale,
@@ -961,7 +968,7 @@ class _SnapToListScreenState extends ConsumerState<SnapToListScreen>
                 );
               }
 
-              if (_error != null && i == _steps.length) {
+              if (_error != null && i == _stepCount) {
                 return _ErrorCard(error: _error!);
               }
 
@@ -1012,8 +1019,9 @@ class _SnapToListScreenState extends ConsumerState<SnapToListScreen>
 
   Widget _buildStepperHeader() {
     // Show first 5 dots in compact mode
+    final steps = _buildSteps(context);
     return Row(
-      children: List.generate(_steps.length * 2 - 1, (i) {
+      children: List.generate(_stepCount * 2 - 1, (i) {
         if (i.isOdd) {
           final lineIndex = i ~/ 2;
           return Expanded(
@@ -1038,7 +1046,7 @@ class _SnapToListScreenState extends ConsumerState<SnapToListScreen>
         final stepState = _stepStates[stepIndex];
 
         Widget circle = _StepperCircle(
-          step: _steps[stepIndex],
+          step: steps[stepIndex],
           state: stepState,
           index: stepIndex + 1,
         );

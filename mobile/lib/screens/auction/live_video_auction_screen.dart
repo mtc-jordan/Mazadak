@@ -9,6 +9,7 @@ import '../../core/providers/auction_provider.dart';
 import '../../core/theme/animations.dart';
 import '../../core/theme/colors.dart';
 import '../../core/theme/haptics.dart';
+import '../../l10n/app_localizations.dart';
 
 /// Premium live video auction screen.
 ///
@@ -469,12 +470,12 @@ class _LiveVideoAuctionScreenState
       child: Row(
         children: [
           _TabButton(
-            label: 'Bids',
+            label: S.of(context).bids,
             isActive: _tabIndex == 0,
             onTap: () => setState(() => _tabIndex = 0),
           ),
           _TabButton(
-            label: 'Chat',
+            label: S.of(context).chat,
             isActive: _tabIndex == 1,
             onTap: () => setState(() => _tabIndex = 1),
           ),
@@ -582,7 +583,7 @@ class _LiveVideoAuctionScreenState
                       fontWeight: FontWeight.w800,
                     ),
                   ),
-                  child: const Text('Place bid'),
+                  child: Text(S.of(context).placeBid),
                 ),
               ),
             ],
@@ -1124,12 +1125,12 @@ class _ChatFeed extends StatelessWidget {
                     fontSize: 12,
                     color: Colors.white,
                   ),
-                  decoration: const InputDecoration(
-                    hintText: 'Say something... قل شيئاً',
-                    hintStyle: TextStyle(fontSize: 12, color: Colors.white24),
+                  decoration: InputDecoration(
+                    hintText: S.of(context).chatHint,
+                    hintStyle: const TextStyle(fontSize: 12, color: Colors.white24),
                     border: InputBorder.none,
                     isDense: true,
-                    contentPadding: EdgeInsets.symmetric(vertical: 8),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 8),
                   ),
                   onSubmitted: (_) => onSend(),
                 ),

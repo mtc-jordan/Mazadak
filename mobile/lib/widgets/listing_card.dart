@@ -11,6 +11,7 @@ import '../core/router.dart';
 import '../core/theme/animations.dart';
 import '../core/theme/colors.dart';
 import '../core/theme/spacing.dart';
+import '../l10n/app_localizations.dart';
 
 /// Listing card for home feed and search results.
 ///
@@ -235,7 +236,7 @@ class _ListingCardState extends State<ListingCard>
 
                     // Bid count
                     Text(
-                      '${ArabicNumerals.formatNumber(listing.bidCount)} مزايدة',
+                      S.of(context).bidCount(ArabicNumerals.formatNumber(listing.bidCount)),
                       style: const TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
@@ -283,13 +284,13 @@ class _ListingCardState extends State<ListingCard>
               runSpacing: AppSpacing.xxs,
               children: [
                 if (listing.isLive)
-                  _Badge(label: 'مباشر', color: AppColors.ember, icon: Icons.circle, iconSize: 6),
+                  _Badge(label: S.of(context).liveBadge, color: AppColors.ember, icon: Icons.circle, iconSize: 6),
                 if (listing.isCertified)
-                  _Badge(label: 'موثّق', color: AppColors.emerald, icon: Icons.verified_rounded),
+                  _Badge(label: S.of(context).certifiedBadge, color: AppColors.emerald, icon: Icons.verified_rounded),
                 if (listing.buyNowPrice != null)
-                  _Badge(label: 'شراء فوري', color: AppColors.gold, icon: Icons.bolt_rounded),
+                  _Badge(label: S.of(context).buyNowBadge, color: AppColors.gold, icon: Icons.bolt_rounded),
                 if (listing.isCharity)
-                  _Badge(label: 'خيري', color: const Color(0xFF0D8A72), icon: Icons.favorite_rounded),
+                  _Badge(label: S.of(context).charityBadge, color: const Color(0xFF0D8A72), icon: Icons.favorite_rounded),
               ],
             ),
           ),

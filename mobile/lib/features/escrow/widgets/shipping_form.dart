@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mzadak/l10n/app_localizations.dart';
 
 import '../../../core/theme/colors.dart';
 import '../../../core/theme/spacing.dart';
@@ -110,8 +111,8 @@ class _ShippingFormState extends State<ShippingForm> {
             controller: _trackingController,
             textDirection: TextDirection.ltr,
             decoration: InputDecoration(
-              labelText: 'رقم التتبع',
-              hintText: 'مثال: 1234567890',
+              labelText: S.of(context).trackingNumberLabel,
+              hintText: S.of(context).trackingNumberHint,
               hintTextDirection: TextDirection.ltr,
               prefixIcon: const Icon(Icons.qr_code_rounded),
               border: OutlineInputBorder(

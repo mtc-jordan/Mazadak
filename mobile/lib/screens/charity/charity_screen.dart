@@ -13,6 +13,7 @@ import '../../core/router.dart';
 import '../../core/theme/animations.dart';
 import '../../core/theme/colors.dart';
 import '../../core/theme/spacing.dart';
+import '../../l10n/app_localizations.dart';
 import '../../widgets/listing_card.dart';
 import '../../widgets/mzadak_refresh_indicator.dart';
 
@@ -890,12 +891,12 @@ class _CharityListingCard extends StatelessWidget {
                       runSpacing: AppSpacing.xxs,
                       children: [
                         _TealBadge(
-                          label: '0% commission · بدون عمولة',
+                          label: S.of(context).noCommission,
                           color: _teal,
                         ),
                         // Show zakat badge based on NGO data
                         _TealBadge(
-                          label: 'زكاة',
+                          label: S.of(context).zakat,
                           color: AppColors.gold,
                         ),
                       ],
@@ -1118,7 +1119,7 @@ class _DonateDirectly extends StatelessWidget {
               fontFamily: 'Sora',
             ),
             decoration: InputDecoration(
-              hintText: 'Custom amount · مبلغ آخر',
+              hintText: S.of(context).customAmountHint,
               hintStyle: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w500,

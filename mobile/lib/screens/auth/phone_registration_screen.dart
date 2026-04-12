@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/router.dart';
 import '../../core/theme/colors.dart';
+import '../../l10n/app_localizations.dart';
 
 /// Phone registration — step 1 of auth flow.
 ///
@@ -94,18 +95,14 @@ class _PhoneRegistrationScreenState extends ConsumerState<PhoneRegistrationScree
       setState(() => _isLoading = false);
 
       if (e.response?.statusCode == 429) {
-        _showError('Too many attempts. Please wait · حاول مرة أخرى لاحقاً');
+        _showError(S.of(context).authTooManyAttempts);
       } else {
-        _showError(
-          'Connection error. Please try again · خطأ في الاتصال، حاول مجدداً',
-        );
+        _showError(S.of(context).authConnectionError);
       }
     } catch (e) {
       if (!mounted) return;
       setState(() => _isLoading = false);
-      _showError(
-        'Something went wrong. Please try again · حدث خطأ، حاول مجدداً',
-      );
+      _showError(S.of(context).authGenericError);
     }
   }
 
@@ -303,7 +300,7 @@ class _PhoneRegistrationScreenState extends ConsumerState<PhoneRegistrationScree
                     vertical: 16,
                   ),
                   prefixIcon: Padding(
-                    padding: const EdgeInsets.only(left: 14, right: 8),
+                    padding: const EdgeInsetsDirectional.only(start: 14, end: 8),
                     child: Text(
                       _selectedCountry.dialCode,
                       style: const TextStyle(
@@ -370,7 +367,7 @@ class _PhoneRegistrationScreenState extends ConsumerState<PhoneRegistrationScree
                           color: Colors.white,
                         ),
                       )
-                    : const Text('Continue · متابعة'),
+                    : Text(S.of(context).authContinue),
               ),
             ),
             const SizedBox(height: 14),
@@ -407,7 +404,7 @@ class _ProgressDots extends StatelessWidget {
         return Container(
           width: 8,
           height: 8,
-          margin: EdgeInsets.only(right: i < total - 1 ? 8 : 0),
+          margin: EdgeInsetsDirectional.only(end: i < total - 1 ? 8 : 0),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: i == current ? AppColors.gold : AppColors.mist.withOpacity(0.3),
@@ -613,7 +610,7 @@ class _CountryPickerSheetState extends State<_CountryPickerSheet> {
             child: TextField(
               autofocus: true,
               decoration: InputDecoration(
-                hintText: 'Search country...',
+                hintText: S.of(context).authSearchCountry,
                 hintStyle: const TextStyle(
                   fontSize: 14,
                   color: AppColors.mist,

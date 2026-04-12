@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../core/l10n/arabic_numerals.dart';
 import '../../core/providers/core_providers.dart';
 import '../../core/router.dart';
@@ -498,9 +499,9 @@ class _ActiveTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (auctions.isEmpty) {
-      return const _EmptyState(
+      return _EmptyState(
         icon: Icons.gavel_rounded,
-        title: 'No active auctions',
+        title: S.of(context).noActiveAuctions,
         titleAr: 'لا توجد مزادات نشطة',
       );
     }
@@ -801,9 +802,9 @@ class _EndedTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (auctions.isEmpty) {
-      return const _EmptyState(
+      return _EmptyState(
         icon: Icons.history_rounded,
-        title: 'No ended auctions',
+        title: S.of(context).noEndedAuctions,
         titleAr: 'لا توجد مزادات منتهية',
       );
     }
@@ -978,9 +979,9 @@ class _WonTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (auctions.isEmpty) {
-      return const _EmptyState(
+      return _EmptyState(
         icon: Icons.emoji_events_rounded,
-        title: 'No auctions won yet',
+        title: S.of(context).noAuctionsWon,
         titleAr: 'لم تفز بأي مزاد بعد',
       );
     }

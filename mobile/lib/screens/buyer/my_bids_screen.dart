@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../core/l10n/arabic_numerals.dart';
 import '../../core/providers/core_providers.dart';
 import '../../core/router.dart';
@@ -422,10 +423,10 @@ class _MyBidsScreenState extends ConsumerState<MyBidsScreen> {
     ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: const Text('Removed from watchlist'),
+        content: Text(S.of(context).removedFromWatchlist),
         duration: const Duration(seconds: 3),
         action: SnackBarAction(
-          label: 'Undo',
+          label: S.of(context).undo,
           textColor: AppColors.gold,
           onPressed: () {
             ref.read(myBidsProvider.notifier).undoWatchlistRemoval(item);
@@ -550,9 +551,9 @@ class _ActiveBidsTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (bids.isEmpty) {
-      return const _EmptyState(
+      return _EmptyState(
         icon: Icons.gavel_rounded,
-        title: 'No active bids',
+        title: S.of(context).noActiveBids,
         titleAr: 'لا توجد مزايدات نشطة',
       );
     }
@@ -927,9 +928,9 @@ class _WonTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (bids.isEmpty) {
-      return const _EmptyState(
+      return _EmptyState(
         icon: Icons.emoji_events_rounded,
-        title: 'No wins yet',
+        title: S.of(context).noWinsYet,
         titleAr: 'لم تفز بأي مزاد بعد',
       );
     }
@@ -1148,9 +1149,9 @@ class _LostTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (bids.isEmpty) {
-      return const _EmptyState(
+      return _EmptyState(
         icon: Icons.sentiment_neutral_rounded,
-        title: 'No lost bids',
+        title: S.of(context).noLostBids,
         titleAr: 'لا توجد مزايدات خاسرة',
       );
     }
@@ -1313,9 +1314,9 @@ class _WatchlistTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) {
-      return const _EmptyState(
+      return _EmptyState(
         icon: Icons.favorite_border_rounded,
-        title: 'Watchlist empty',
+        title: S.of(context).watchlistEmpty,
         titleAr: 'قائمة المراقبة فارغة',
       );
     }

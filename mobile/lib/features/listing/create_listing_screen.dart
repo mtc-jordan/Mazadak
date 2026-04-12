@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:mzadak/l10n/app_localizations.dart';
 
 import '../../core/providers/create_listing_provider.dart';
 import '../../core/theme/colors.dart';
@@ -59,8 +60,8 @@ class _CreateListingScreenState extends ConsumerState<CreateListingScreen> {
     switch (s.currentStep) {
       case 0:
         if (!s.canProceedFromPhotos) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('أضف ٣ صور على الأقل'),
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(S.of(context).addMinPhotos),
             backgroundColor: AppColors.ember,
           ));
           return;
@@ -173,8 +174,8 @@ class _CreateListingScreenState extends ConsumerState<CreateListingScreen> {
                             borderRadius: AppSpacing.radiusMd,
                           ),
                         ),
-                        child: const Text('السابق',
-                            style: TextStyle(fontWeight: FontWeight.w600)),
+                        child: Text(S.of(context).previous,
+                            style: const TextStyle(fontWeight: FontWeight.w600)),
                       ),
                     ),
                   if (s.currentStep > 0) const SizedBox(width: 12),
@@ -201,10 +202,14 @@ class _StepIndicator extends StatelessWidget {
   final int currentStep;
   final void Function(int) onTap;
 
-  static const _labels = ['صور', 'تفاصيل', 'سعر', 'جدولة', 'نشر'];
+  static List<String> _labels(BuildContext context) {
+    final l = S.of(context);
+    return [l.photosStep, l.detailsStep, l.pricingStep, l.scheduleStep, 'نشر'];
+  }
 
   @override
   Widget build(BuildContext context) {
+    final labels = _labels(context);
     return Padding(
       padding: AppSpacing.horizontalMd,
       child: Row(
@@ -232,7 +237,7 @@ class _StepIndicator extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    _labels[i],
+                    labels[i],
                     style: TextStyle(
                       fontSize: 10,
                       fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
@@ -339,7 +344,7 @@ class _PhotoStep extends ConsumerWidget {
             Expanded(
               child: OutlinedButton.icon(
                 icon: const Icon(Icons.camera_alt_rounded, size: 18),
-                label: const Text('الكاميرا'),
+                label: Text(S.of(context).camera),
                 onPressed: () => _takePhoto(ref),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppColors.navy,
@@ -354,7 +359,7 @@ class _PhotoStep extends ConsumerWidget {
             Expanded(
               child: OutlinedButton.icon(
                 icon: const Icon(Icons.photo_library_rounded, size: 18),
-                label: const Text('المعرض'),
+                label: Text(S.of(context).gallery),
                 onPressed: () => _pickImages(context, ref),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppColors.navy,
@@ -406,14 +411,14 @@ class _AddPhotoTile extends StatelessWidget {
             style: BorderStyle.solid,
           ),
         ),
-        child: const Column(
+        child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.add_photo_alternate_rounded,
+            const Icon(Icons.add_photo_alternate_rounded,
                 size: 28, color: AppColors.mist),
-            SizedBox(height: 4),
-            Text('إضافة',
-                style: TextStyle(fontSize: 11, color: AppColors.mist)),
+            const SizedBox(height: 4),
+            Text(S.of(context).add,
+                style: const TextStyle(fontSize: 11, color: AppColors.mist)),
           ],
         ),
       ),
@@ -449,7 +454,7 @@ class _PhotoTile extends StatelessWidget {
           ),
         ),
         if (isPrimary)
-          Positioned(
+          PositionedDirectional(
             bottom: 4,
             start: 4,
             child: Container(
@@ -458,14 +463,14 @@ class _PhotoTile extends StatelessWidget {
                 color: AppColors.gold,
                 borderRadius: AppSpacing.radiusSm,
               ),
-              child: const Text('رئيسية',
-                  style: TextStyle(
+              child: Text(S.of(context).primaryBadge,
+                  style: const TextStyle(
                       fontSize: 9,
                       color: Colors.white,
                       fontWeight: FontWeight.w600)),
             ),
           ),
-        Positioned(
+        PositionedDirectional(
           top: 4,
           end: 4,
           child: GestureDetector(
@@ -686,12 +691,12 @@ class _PricingStep extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Row(
+                  Row(
                     children: [
-                      Icon(Icons.auto_awesome, size: 16, color: AppColors.gold),
-                      SizedBox(width: 8),
-                      Text('تقدير السعر بالذكاء الاصطناعي',
-                          style: TextStyle(
+                      const Icon(Icons.auto_awesome, size: 16, color: AppColors.gold),
+                      const SizedBox(width: 8),
+                      Text(S.of(context).aiPriceEstimation,
+                          style: const TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w600,
                               color: AppColors.gold)),
@@ -827,8 +832,8 @@ class _ScheduleStep extends ConsumerWidget {
         // Start time
         _buildLabel('وقت البدء'),
         SwitchListTile(
-          title: const Text('ابدأ فوراً',
-              style: TextStyle(fontSize: 14, color: AppColors.navy)),
+          title: Text(S.of(context).startNow,
+              style: const TextStyle(fontSize: 14, color: AppColors.navy)),
           value: s.startNow,
           onChanged: notifier.updateStartNow,
           activeColor: AppColors.gold,
@@ -969,7 +974,7 @@ class _ReviewStep extends ConsumerWidget {
 
         // Photos summary
         _ReviewSection(
-          title: 'الصور',
+          title: S.of(context).photosStep,
           step: 0,
           onEdit: onEditSection,
           child: SizedBox(
@@ -999,7 +1004,7 @@ class _ReviewStep extends ConsumerWidget {
 
         // Details summary
         _ReviewSection(
-          title: 'التفاصيل',
+          title: S.of(context).detailsStep,
           step: 1,
           onEdit: onEditSection,
           child: Column(
@@ -1019,7 +1024,7 @@ class _ReviewStep extends ConsumerWidget {
 
         // Pricing summary
         _ReviewSection(
-          title: 'الأسعار',
+          title: S.of(context).pricingStep,
           step: 2,
           onEdit: onEditSection,
           child: Column(
@@ -1041,7 +1046,7 @@ class _ReviewStep extends ConsumerWidget {
 
         // Schedule summary
         _ReviewSection(
-          title: 'الجدولة',
+          title: S.of(context).scheduleStep,
           step: 3,
           onEdit: onEditSection,
           child: Column(
@@ -1122,8 +1127,8 @@ class _ReviewSection extends StatelessWidget {
                       color: AppColors.navy)),
               GestureDetector(
                 onTap: () => onEdit(step),
-                child: const Text('تعديل',
-                    style: TextStyle(
+                child: Text(S.of(context).edit,
+                    style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                         color: AppColors.gold)),

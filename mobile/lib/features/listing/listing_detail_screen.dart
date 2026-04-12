@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:mzadak/l10n/app_localizations.dart';
 
 import '../../core/l10n/arabic_numerals.dart';
 import '../../core/providers/listing_detail_provider.dart';
@@ -122,15 +123,15 @@ class ListingDetailScreen extends ConsumerWidget {
                   const SizedBox(height: AppSpacing.md),
 
                   // ── Details section ────────────────────────────
-                  _DetailRow(label: 'الفئة', value: listing.category),
+                  _DetailRow(label: S.of(context).categoryLabel, value: listing.category),
                   _DetailRow(
-                    label: 'الحالة',
+                    label: S.of(context).conditionLabel,
                     value: listing.condition,
                     valueColor: _conditionColor(listing.condition),
                   ),
                   if (listing.watcherCount > 0)
                     _DetailRow(
-                      label: 'المتابعون',
+                      label: S.of(context).followersLabel,
                       value: '${ArabicNumerals.formatNumber(listing.watcherCount)} شخص',
                     ),
 
@@ -268,13 +269,13 @@ class _BadgesRow extends StatelessWidget {
       runSpacing: AppSpacing.xxs,
       children: [
         if (listing.isLive)
-          _Chip(label: 'مباشر', color: AppColors.ember, icon: Icons.circle),
+          _Chip(label: S.of(context).liveBadge, color: AppColors.ember, icon: Icons.circle),
         if (listing.isCertified)
-          _Chip(label: 'موثّق', color: AppColors.emerald, icon: Icons.verified_rounded),
+          _Chip(label: S.of(context).certifiedBadge, color: AppColors.emerald, icon: Icons.verified_rounded),
         if (listing.buyNowPrice != null)
-          _Chip(label: 'شراء فوري', color: AppColors.gold, icon: Icons.bolt_rounded),
+          _Chip(label: S.of(context).buyNowBadge, color: AppColors.gold, icon: Icons.bolt_rounded),
         if (listing.isCharity)
-          _Chip(label: 'خيري', color: const Color(0xFF0D8A72), icon: Icons.favorite_rounded),
+          _Chip(label: S.of(context).charityBadge, color: const Color(0xFF0D8A72), icon: Icons.favorite_rounded),
         if (listing.isSnapToList)
           _Chip(label: 'Snap-to-List', color: AppColors.navy, icon: Icons.auto_awesome_rounded),
       ],

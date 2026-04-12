@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mzadak/l10n/app_localizations.dart';
 
 import '../../core/theme/animations.dart';
 import '../../core/theme/colors.dart';
@@ -12,41 +13,63 @@ import '../../core/theme/spacing.dart';
 /// Pipeline step definitions matching SDD §3.4.1.
 enum _PipelineStep {
   clip(
-    label: 'تحليل الصور',
-    sublabel: 'CLIP ViT-B/32',
     icon: Icons.image_search_rounded,
     estimatedMs: 800,
+    sublabelFallback: 'CLIP ViT-B/32',
   ),
   category(
-    label: 'تصنيف المنتج',
-    sublabel: 'كشف العلامة التجارية والحالة',
     icon: Icons.category_rounded,
     estimatedMs: 500,
+    sublabelFallback: '',
   ),
   gpt(
-    label: 'كتابة القائمة',
-    sublabel: 'GPT-4o عربي/إنجليزي',
     icon: Icons.auto_awesome_rounded,
     estimatedMs: 3500,
+    sublabelFallback: '',
   ),
   price(
-    label: 'تقدير السعر',
-    sublabel: 'Price Oracle',
     icon: Icons.price_change_rounded,
     estimatedMs: 300,
+    sublabelFallback: 'Price Oracle',
   );
 
   const _PipelineStep({
-    required this.label,
-    required this.sublabel,
     required this.icon,
     required this.estimatedMs,
+    this.sublabelFallback = '',
   });
 
-  final String label;
-  final String sublabel;
   final IconData icon;
   final int estimatedMs;
+  final String sublabelFallback;
+
+  String label(BuildContext context) {
+    final l = S.of(context);
+    switch (this) {
+      case _PipelineStep.clip:
+        return l.photoAnalysis;
+      case _PipelineStep.category:
+        return l.productClassification;
+      case _PipelineStep.gpt:
+        return l.generateListing;
+      case _PipelineStep.price:
+        return l.priceEstimation;
+    }
+  }
+
+  String sublabel(BuildContext context) {
+    final l = S.of(context);
+    switch (this) {
+      case _PipelineStep.clip:
+        return 'CLIP ViT-B/32';
+      case _PipelineStep.category:
+        return l.brandConditionDetection;
+      case _PipelineStep.gpt:
+        return l.gpt4oArabicEnglish;
+      case _PipelineStep.price:
+        return 'Price Oracle';
+    }
+  }
 }
 
 /// Snap-to-List AI pipeline screen.
@@ -403,7 +426,7 @@ class _PipelineStepTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    step.label,
+                    step.label(context),
                     style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
@@ -416,7 +439,7 @@ class _PipelineStepTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    step.sublabel,
+                    step.sublabel(context),
                     style: TextStyle(
                       fontSize: 12,
                       color: isPending

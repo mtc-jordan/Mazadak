@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:mzadak/l10n/app_localizations.dart';
 
 import '../../../core/theme/colors.dart';
 import '../../../core/theme/spacing.dart';
@@ -122,8 +123,8 @@ class _DisputeFlowContentState extends State<_DisputeFlowContent> {
     if (size > _maxSizeBytes) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('حجم الصورة يتجاوز 5 ميغابايت'),
+        SnackBar(
+          content: Text(S.of(context).disputeImageTooLarge),
           backgroundColor: AppColors.ember,
         ),
       );
@@ -138,8 +139,8 @@ class _DisputeFlowContentState extends State<_DisputeFlowContent> {
 
   void _showMaxPhotosWarning() {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('الحد الأقصى ١٠ صور'),
+      SnackBar(
+        content: Text(S.of(context).disputeMaxPhotos),
         backgroundColor: AppColors.ember,
       ),
     );
@@ -448,13 +449,13 @@ class _AddPhotoTile extends StatelessWidget {
           children: [
             _PickerButton(
               icon: Icons.camera_alt_rounded,
-              label: 'الكاميرا',
+              label: S.of(context).camera,
               onTap: onCamera,
             ),
             const SizedBox(width: AppSpacing.xl),
             _PickerButton(
               icon: Icons.photo_library_rounded,
-              label: 'المعرض',
+              label: S.of(context).gallery,
               onTap: onGallery,
             ),
           ],
@@ -486,7 +487,7 @@ class _AddPhotoTile extends StatelessWidget {
           children: [
             ListTile(
               leading: const Icon(Icons.camera_alt_rounded),
-              title: const Text('الكاميرا'),
+              title: Text(S.of(context).camera),
               onTap: () {
                 Navigator.pop(context);
                 onCamera();
@@ -494,7 +495,7 @@ class _AddPhotoTile extends StatelessWidget {
             ),
             ListTile(
               leading: const Icon(Icons.photo_library_rounded),
-              title: const Text('المعرض'),
+              title: Text(S.of(context).gallery),
               onTap: () {
                 Navigator.pop(context);
                 onGallery();

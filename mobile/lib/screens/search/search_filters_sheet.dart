@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../core/providers/create_listing_provider.dart';
 import '../../core/providers/search_provider.dart';
 import '../../core/theme/colors.dart';
@@ -283,7 +284,7 @@ class _SearchFiltersSheetState extends State<SearchFiltersSheet> {
                   Expanded(
                     child: _PriceField(
                       controller: _priceMinController,
-                      hint: 'الحد الأدنى',
+                      hint: S.of(context).priceMin,
                     ),
                   ),
                   const Padding(
@@ -300,7 +301,7 @@ class _SearchFiltersSheetState extends State<SearchFiltersSheet> {
                   Expanded(
                     child: _PriceField(
                       controller: _priceMaxController,
-                      hint: 'الحد الأقصى',
+                      hint: S.of(context).priceMax,
                     ),
                   ),
                 ],
@@ -411,7 +412,7 @@ class _SearchFiltersSheetState extends State<SearchFiltersSheet> {
                             fontWeight: FontWeight.w600,
                           ),
                         ),
-                        child: const Text('مسح الكل'),
+                        child: Text(S.of(context).clearAll),
                       ),
                     ),
                   ),
@@ -436,7 +437,7 @@ class _SearchFiltersSheetState extends State<SearchFiltersSheet> {
                             fontWeight: FontWeight.w700,
                           ),
                         ),
-                        child: const Text('تطبيق الفلاتر'),
+                        child: Text(S.of(context).applyFilters),
                       ),
                     ),
                   ),

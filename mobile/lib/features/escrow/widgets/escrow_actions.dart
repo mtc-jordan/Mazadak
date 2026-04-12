@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mzadak/l10n/app_localizations.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/providers/escrow_provider.dart';
@@ -47,7 +48,7 @@ class EscrowActions extends StatelessWidget {
       case EscrowStatus.paymentPending when !isSeller:
         return [
           _ActionButton(
-            label: 'ادفع الآن',
+            label: S.of(context).payNow,
             icon: Icons.payment_rounded,
             color: AppColors.gold,
             onPressed: onPayNow ?? () {},
@@ -58,7 +59,7 @@ class EscrowActions extends StatelessWidget {
       case EscrowStatus.shippingRequested when isSeller:
         return [
           _ActionButton(
-            label: 'إنشاء بوليصة أرامكس',
+            label: S.of(context).createAramexLabel,
             icon: Icons.local_shipping_rounded,
             color: AppColors.navy,
             onPressed: onGenerateLabel,
@@ -66,7 +67,7 @@ class EscrowActions extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.sm),
           _ActionButton(
-            label: 'إدخال رقم التتبع',
+            label: S.of(context).enterTrackingNumber,
             icon: Icons.qr_code_rounded,
             color: AppColors.gold,
             onPressed: onEnterTracking,
@@ -78,7 +79,7 @@ class EscrowActions extends StatelessWidget {
         return [
           if (escrow.trackingUrl != null)
             _ActionButton(
-              label: 'تتبع الشحنة',
+              label: S.of(context).trackShipment,
               icon: Icons.location_on_rounded,
               color: AppColors.navy,
               onPressed: () => _openTrackingUrl(context),
@@ -88,7 +89,7 @@ class EscrowActions extends StatelessWidget {
       case EscrowStatus.inspectionPeriod when !isSeller:
         return [
           _ActionButton(
-            label: 'تأكيد الاستلام',
+            label: S.of(context).confirmReceipt,
             icon: Icons.check_circle_rounded,
             color: AppColors.emerald,
             onPressed: onConfirmDelivery,
@@ -96,7 +97,7 @@ class EscrowActions extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.sm),
           _ActionButton(
-            label: 'الإبلاغ عن مشكلة',
+            label: S.of(context).reportIssue,
             icon: Icons.report_problem_rounded,
             color: AppColors.ember,
             onPressed: onReportProblem,

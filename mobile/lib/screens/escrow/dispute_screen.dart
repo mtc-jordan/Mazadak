@@ -11,6 +11,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/providers/core_providers.dart';
 import '../../core/theme/colors.dart';
 import '../../core/theme/spacing.dart';
+import '../../l10n/app_localizations.dart';
 
 /// Dispute screen — 3-step wizard reached from EscrowOrderScreen.
 ///
@@ -58,32 +59,17 @@ class _DisputeScreenState extends ConsumerState<DisputeScreen>
   late final Animation<double> _successScale;
   late final AnimationController _checkController;
 
-  static const _reasons = [
-    (
-      title: 'Item not as described',
-      subtitle: 'Condition, specs, or photos didn\'t match',
-    ),
-    (
-      title: 'Item not received',
-      subtitle: 'Seller hasn\'t shipped after 48h',
-    ),
-    (
-      title: 'Item damaged',
-      subtitle: 'Arrived broken or damaged in transit',
-    ),
-    (
-      title: 'Counterfeit item',
-      subtitle: 'Item is not authentic as claimed',
-    ),
-    (
-      title: 'Wrong item received',
-      subtitle: 'Different item than what was listed',
-    ),
-    (
-      title: 'Other',
-      subtitle: 'Describe your issue',
-    ),
-  ];
+  static List<({String title, String subtitle})> _reasons(BuildContext context) {
+    final l = S.of(context);
+    return [
+      (title: l.disputeNotAsDescribed, subtitle: l.disputeNotAsDescribedSub),
+      (title: l.disputeNotReceived, subtitle: l.disputeNotReceivedSub),
+      (title: l.disputeDamaged, subtitle: l.disputeDamagedSub),
+      (title: l.disputeCounterfeit, subtitle: l.disputeCounterfeitSub),
+      (title: l.disputeWrongItem, subtitle: l.disputeWrongItemSub),
+      (title: l.disputeOther, subtitle: l.disputeOtherSub),
+    ];
+  }
 
   static const _resolutions = [
     (title: 'Full refund', icon: Icons.payments_rounded),
@@ -203,8 +189,8 @@ class _DisputeScreenState extends ConsumerState<DisputeScreen>
     if (size > _maxSizeBytes) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Photo exceeds 5MB limit'),
+        SnackBar(
+          content: Text(S.of(context).disputeImageTooLarge),
           backgroundColor: AppColors.ember,
         ),
       );
@@ -226,8 +212,8 @@ class _DisputeScreenState extends ConsumerState<DisputeScreen>
 
   void _showMaxPhotosSnackbar() {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Maximum 10 photos allowed'),
+      SnackBar(
+        content: Text(S.of(context).disputeMaxPhotos),
         backgroundColor: AppColors.ember,
       ),
     );
@@ -246,7 +232,7 @@ class _DisputeScreenState extends ConsumerState<DisputeScreen>
 
       formData.fields.add(MapEntry(
         'reason',
-        _reasons[_selectedReasonIndex!].title,
+        _reasons(context)[_selectedReasonIndex!].title,
       ));
       formData.fields.add(MapEntry(
         'description',
@@ -437,7 +423,7 @@ class _DisputeScreenState extends ConsumerState<DisputeScreen>
                   ),
                 2 => _ReviewStep(
                     key: const ValueKey('step-2'),
-                    reason: _reasons[_selectedReasonIndex!],
+                    reason: _reasons(context)[_selectedReasonIndex!],
                     photoCount: _photos.length,
                     description: _descController.text,
                     resolutionIndex: _resolutionIndex,
@@ -492,8 +478,8 @@ class _ReasonStep extends StatelessWidget {
           ),
         ),
         const SizedBox(height: AppSpacing.lg),
-        ...List.generate(_DisputeScreenState._reasons.length, (i) {
-          final reason = _DisputeScreenState._reasons[i];
+        ...List.generate(_DisputeScreenState._reasons(context).length, (i) {
+          final reason = _DisputeScreenState._reasons(context)[i];
           final isSelected = selectedIndex == i;
 
           return Padding(
@@ -815,7 +801,7 @@ class _EmptyCell extends StatelessWidget {
           children: [
             ListTile(
               leading: const Icon(Icons.camera_alt_rounded, color: AppColors.navy),
-              title: const Text('Camera'),
+              title: Text(S.of(context).camera),
               onTap: () {
                 Navigator.pop(context);
                 onPickCamera();
@@ -823,7 +809,7 @@ class _EmptyCell extends StatelessWidget {
             ),
             ListTile(
               leading: const Icon(Icons.photo_library_rounded, color: AppColors.navy),
-              title: const Text('Gallery'),
+              title: Text(S.of(context).gallery),
               onTap: () {
                 Navigator.pop(context);
                 onPickGallery();
@@ -867,7 +853,7 @@ class _DescriptionField extends StatelessWidget {
               null,
           style: const TextStyle(fontSize: 14, color: AppColors.ink),
           decoration: InputDecoration(
-            hintText: 'Explain what happened...',
+            hintText: S.of(context).disputeExplain,
             hintStyle: const TextStyle(color: AppColors.mist, fontSize: 14),
             filled: true,
             fillColor: Colors.white,

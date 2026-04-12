@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/router.dart';
 import '../../core/theme/colors.dart';
+import '../../l10n/app_localizations.dart';
 
 /// MZADAK welcome / onboarding screen.
 ///
@@ -155,14 +156,14 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                     const SizedBox(height: 20),
 
                     // Feature pills
-                    const Wrap(
+                    Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       alignment: WrapAlignment.center,
                       children: [
-                        _FeaturePill(label: '🛡 Smart Escrow'),
-                        _FeaturePill(label: '🤖 AI Pricing'),
-                        _FeaturePill(label: '📱 WhatsApp Bids'),
+                        _FeaturePill(label: '\u{1F6E1} ${S.of(context).smartEscrow}'),
+                        _FeaturePill(label: '\u{1F916} ${S.of(context).aiPricing}'),
+                        _FeaturePill(label: '\u{1F4F1} ${S.of(context).whatsappBids}'),
                       ],
                     ),
 
@@ -188,7 +189,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                             height: 1,
                           ),
                         ),
-                        child: const Text('Get started · ابدأ الآن'),
+                        child: Text(S.of(context).authGetStarted),
                       ),
                     ),
                     const SizedBox(height: 16),

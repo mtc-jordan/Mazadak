@@ -26,6 +26,7 @@ import '../screens/auth/splash_screen.dart';
 import '../screens/auth/welcome_screen.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/search/search_screen.dart';
+import '../l10n/app_localizations.dart';
 import 'providers/auth_provider.dart';
 import 'router/transitions.dart';
 import 'theme/colors.dart';
@@ -367,17 +368,21 @@ class _MzadakBottomNav extends StatelessWidget {
 
   static const _navy2 = Color(0xFF152840);
 
-  static const _items = [
-    (icon: Icons.home_rounded, label: 'Home'),
-    (icon: Icons.search_rounded, label: 'Browse'),
-    (icon: Icons.add, label: ''), // placeholder — center button
-    (icon: Icons.favorite_rounded, label: 'Saved'),
-    (icon: Icons.person_rounded, label: 'Profile'),
-  ];
+  static List<({IconData icon, String label})> _items(BuildContext context) {
+    final l = S.of(context);
+    return [
+      (icon: Icons.home_rounded, label: l.navHome),
+      (icon: Icons.search_rounded, label: l.navBrowse),
+      (icon: Icons.add, label: ''), // placeholder — center button
+      (icon: Icons.favorite_rounded, label: l.navSaved),
+      (icon: Icons.person_rounded, label: l.navProfile),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
     final bottomPad = MediaQuery.of(context).padding.bottom;
+    final items = _items(context);
 
     return Container(
       height: 60 + bottomPad,
@@ -399,8 +404,8 @@ class _MzadakBottomNav extends StatelessWidget {
                   behavior: HitTestBehavior.opaque,
                   onTap: () => onTap(i),
                   child: _NavItem(
-                    icon: _items[i].icon,
-                    label: _items[i].label,
+                    icon: items[i].icon,
+                    label: items[i].label,
                     isSelected: selected,
                   ),
                 ),

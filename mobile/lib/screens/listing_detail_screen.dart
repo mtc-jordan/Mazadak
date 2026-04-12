@@ -15,6 +15,7 @@ import '../core/theme/colors.dart';
 import '../core/theme/haptics.dart';
 import '../core/theme/spacing.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import '../l10n/app_localizations.dart';
 
 // ═══════════════════════════════════════════════════════════════════════
 //  ListingDetailScreen
@@ -222,8 +223,8 @@ class _ListingDetailScreenState extends ConsumerState<ListingDetailScreen>
                         text: 'https://mzadak.com/listing/${widget.listingId}'));
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: const Text('تم نسخ الرابط',
-                            style: TextStyle(fontFamily: 'NotoKufiArabic')),
+                        content: Text(S.of(context).linkCopied,
+                            style: const TextStyle(fontFamily: 'NotoKufiArabic')),
                         backgroundColor: AppColors.navy,
                         behavior: SnackBarBehavior.floating,
                         shape: RoundedRectangleBorder(
@@ -1400,37 +1401,38 @@ class _SpecsGrid extends StatelessWidget {
       if (listing.locationCountry != null) listing.locationCountry,
     ].join('، ');
 
+    final l = S.of(context);
     final specs = [
       _SpecItem(
         icon: Icons.category_rounded,
-        label: 'الفئة',
+        label: l.categoryLabel,
         value: listing.category,
       ),
       _SpecItem(
         icon: Icons.star_rounded,
-        label: 'الحالة',
+        label: l.conditionLabel,
         value: listing.condition,
         chipColor: _conditionColor(listing.condition),
       ),
       _SpecItem(
         icon: Icons.location_on_rounded,
-        label: 'الموقع',
+        label: l.locationLabel,
         value: location.isNotEmpty ? location : '—',
       ),
       _SpecItem(
         icon: Icons.trending_up_rounded,
-        label: 'الحد الأدنى للمزايدة',
+        label: l.minBidLabel,
         value: ArabicNumerals.formatCurrencyEn(
             listing.minIncrement, listing.currency),
       ),
       _SpecItem(
         icon: Icons.visibility_rounded,
-        label: 'المشاهدات',
+        label: l.viewsLabel,
         value: ArabicNumerals.formatNumber(listing.viewCount),
       ),
       _SpecItem(
         icon: Icons.calendar_today_rounded,
-        label: 'تاريخ النشر',
+        label: l.publishedDateLabel,
         value: dateStr.isNotEmpty ? dateStr : '—',
       ),
     ];

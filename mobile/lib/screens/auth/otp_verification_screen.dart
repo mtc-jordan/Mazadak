@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/router.dart';
 import '../../core/theme/colors.dart';
+import '../../l10n/app_localizations.dart';
 
 /// OTP verification — step 2 of auth flow.
 ///
@@ -281,7 +282,7 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen>
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: const Text('Code resent · تم إعادة إرسال الرمز'),
+        content: Text(S.of(context).authCodeResent),
         backgroundColor: AppColors.navy,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -629,7 +630,7 @@ class _ProgressDots extends StatelessWidget {
         return Container(
           width: 8,
           height: 8,
-          margin: EdgeInsets.only(right: i < total - 1 ? 8 : 0),
+          margin: EdgeInsetsDirectional.only(end: i < total - 1 ? 8 : 0),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: isActive

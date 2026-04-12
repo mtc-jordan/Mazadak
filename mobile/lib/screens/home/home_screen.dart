@@ -17,6 +17,7 @@ import '../../core/router.dart';
 import '../../core/theme/animations.dart';
 import '../../core/theme/colors.dart';
 import '../../core/theme/spacing.dart';
+import '../../l10n/app_localizations.dart';
 import '../../widgets/listing_card.dart';
 import '../../widgets/listing_card_skeleton.dart';
 
@@ -33,23 +34,44 @@ const _kCompactCardHeight = 210.0;
 const _kWideThumbSize = 88.0;
 const _kStaggerDelayMs = 40;
 
-/// All 12 backend categories.
-const _categories = <({String labelAr, String labelEn, int? id, IconData icon})>[
-  (labelAr: 'الكل', labelEn: 'All', id: null, icon: Icons.grid_view_rounded),
-  (labelAr: 'إلكترونيات', labelEn: 'Electronics', id: 1, icon: Icons.devices_rounded),
-  (labelAr: 'سيارات', labelEn: 'Vehicles', id: 2, icon: Icons.directions_car_rounded),
-  (labelAr: 'أثاث ومنزل', labelEn: 'Furniture', id: 3, icon: Icons.chair_rounded),
-  (labelAr: 'أزياء', labelEn: 'Fashion', id: 4, icon: Icons.checkroom_rounded),
-  (labelAr: 'مجوهرات', labelEn: 'Jewelry', id: 5, icon: Icons.diamond_rounded),
-  (labelAr: 'مقتنيات', labelEn: 'Collectibles', id: 6, icon: Icons.collections_rounded),
-  (labelAr: 'رياضة', labelEn: 'Sports', id: 7, icon: Icons.sports_soccer_rounded),
-  (labelAr: 'عقارات', labelEn: 'Real Estate', id: 8, icon: Icons.home_work_rounded),
-  (labelAr: 'كتب وفنون', labelEn: 'Art', id: 9, icon: Icons.palette_rounded),
-  (labelAr: 'ألعاب', labelEn: 'Toys', id: 10, icon: Icons.toys_rounded),
-  (labelAr: 'أعمال', labelEn: 'Business', id: 11, icon: Icons.business_center_rounded),
+/// All 12 backend categories — labels come from l10n.
+const _categoryMeta = <({int? id, IconData icon})>[
+  (id: null, icon: Icons.grid_view_rounded),
+  (id: 1, icon: Icons.devices_rounded),
+  (id: 2, icon: Icons.directions_car_rounded),
+  (id: 3, icon: Icons.chair_rounded),
+  (id: 4, icon: Icons.checkroom_rounded),
+  (id: 5, icon: Icons.diamond_rounded),
+  (id: 6, icon: Icons.collections_rounded),
+  (id: 7, icon: Icons.sports_soccer_rounded),
+  (id: 8, icon: Icons.home_work_rounded),
+  (id: 9, icon: Icons.palette_rounded),
+  (id: 10, icon: Icons.toys_rounded),
+  (id: 11, icon: Icons.business_center_rounded),
 ];
 
-const _searchHints = ['ساعات فاخرة...', 'سيارات...', 'إلكترونيات...', 'مجوهرات...'];
+List<String> _categoryLabels(BuildContext context) {
+  final l = S.of(context);
+  return [
+    l.categoryAll,
+    l.categoryElectronics,
+    l.categoryVehicles,
+    l.categoryFurniture,
+    l.categoryFashion,
+    l.categoryJewelry,
+    l.categoryOther, // Collectibles
+    l.categorySports,
+    l.categoryRealEstate,
+    l.categoryArt,
+    l.categoryOther, // Toys
+    l.categoryOther, // Business
+  ];
+}
+
+List<String> _searchHints(BuildContext context) {
+  final l = S.of(context);
+  return [l.searchHintWatches, l.searchHintCars, l.searchHintElectronics, l.searchHintJewelry];
+}
 
 // ═══════════════════════════════════════════════════════════════════
 //  Home Screen
@@ -114,7 +136,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       const Duration(milliseconds: _kSearchHintCycleMs),
       (_) {
         if (mounted) {
-          setState(() => _searchHintIndex = (_searchHintIndex + 1) % _searchHints.length);
+          setState(() => _searchHintIndex = (_searchHintIndex + 1) % 4);
         }
       },
     );
@@ -144,7 +166,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (_selectedCategory == index) return;
     HapticFeedback.selectionClick();
     setState(() => _selectedCategory = index);
-    ref.read(homeFeedProvider.notifier).filterByCategory(_categories[index].id);
+    ref.read(homeFeedProvider.notifier).filterByCategory(_categoryMeta[index].id);
   }
 
   @override
@@ -479,7 +501,7 @@ class _MzadakAppBarState extends ConsumerState<_MzadakAppBar> {
                                   ),
                                 ),
                                 child: Text(
-                                  'ابحث... ${_searchHints[widget.searchHintIndex]}',
+                                  '${S.of(context).search}... ${_searchHints(context)[widget.searchHintIndex]}',
                                   key: ValueKey(widget.searchHintIndex),
                                   style: const TextStyle(
                                     color: Colors.white38,
@@ -529,10 +551,11 @@ class _CategoryRow extends StatelessWidget {
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsetsDirectional.fromSTEB(16, 10, 16, 10),
-        itemCount: _categories.length,
+        itemCount: _categoryMeta.length,
         separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
-          final cat = _categories[index];
+          final cat = _categoryMeta[index];
+          final labels = _categoryLabels(context);
           final isActive = index == selected;
           return GestureDetector(
             onTap: () => onTap(index),
@@ -561,7 +584,7 @@ class _CategoryRow extends StatelessWidget {
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    cat.labelAr,
+                    labels[index],
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -693,10 +716,10 @@ class _FeaturedBannerState extends State<_FeaturedBanner> {
                               Row(
                                 children: [
                                   if (listing.isCertified)
-                                    _Badge(label: 'CERTIFIED', color: AppColors.emerald),
+                                    _Badge(label: S.of(context).certifiedBadge, color: AppColors.emerald),
                                   if (listing.isCertified) const SizedBox(width: 6),
                                   if (listing.isLive)
-                                    _Badge(label: 'LIVE', color: AppColors.ember),
+                                    _Badge(label: S.of(context).liveBadge, color: AppColors.ember),
                                 ],
                               ),
                               const SizedBox(height: 8),
@@ -899,9 +922,9 @@ class _LiveNowBannerState extends State<_LiveNowBanner>
                       ),
                     ),
                     const SizedBox(height: 4),
-                    const Text(
-                      'LIVE',
-                      style: TextStyle(
+                    Text(
+                      S.of(context).liveBadge,
+                      style: const TextStyle(
                         color: AppColors.ember,
                         fontSize: 8,
                         fontWeight: FontWeight.w800,
@@ -1133,16 +1156,16 @@ class _CompactListingCard extends StatelessWidget {
                     ),
                     // Badges
                     if (listing.isCertified)
-                      const PositionedDirectional(
+                      PositionedDirectional(
                         top: 6,
                         start: 6,
-                        child: _Badge(label: 'CERTIFIED', color: AppColors.emerald),
+                        child: _Badge(label: S.of(context).certifiedBadge, color: AppColors.emerald),
                       ),
                     if (listing.isLive && !listing.isCertified)
-                      const PositionedDirectional(
+                      PositionedDirectional(
                         top: 6,
                         start: 6,
-                        child: _Badge(label: 'LIVE', color: AppColors.ember),
+                        child: _Badge(label: S.of(context).liveBadge, color: AppColors.ember),
                       ),
                     // Condition badge (frosted glass)
                     PositionedDirectional(

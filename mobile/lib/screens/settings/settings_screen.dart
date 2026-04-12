@@ -13,6 +13,7 @@ import '../../core/providers/auth_provider.dart';
 import '../../core/router.dart';
 import '../../core/theme/colors.dart';
 import '../../core/theme/spacing.dart';
+import '../../l10n/app_localizations.dart';
 
 // ══════════════════════════════════════════════════════════════════
 // Settings Screen
@@ -94,9 +95,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   void _setTheme(int index) {
     if (index != 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Coming soon — Dark mode in v2'),
-          duration: Duration(seconds: 2),
+        SnackBar(
+          content: Text(S.of(context).settingsDarkModeSoon),
+          duration: const Duration(seconds: 2),
         ),
       );
       return;
@@ -108,14 +109,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Log out of MZADAK?'),
+        title: Text(S.of(context).settingsLogoutTitle),
         content: const Text(
           'You will need to sign in again with your phone number.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(S.of(context).cancel),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
@@ -123,7 +124,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               backgroundColor: AppColors.ember,
               foregroundColor: Colors.white,
             ),
-            child: const Text('Log out'),
+            child: Text(S.of(context).settingsLogout),
           ),
         ],
       ),
@@ -152,7 +153,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(S.of(context).cancel),
           ),
           ElevatedButton(
             onPressed: () {
@@ -175,11 +176,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Type DELETE to confirm'),
+        title: Text(S.of(context).settingsDeleteConfirmTitle),
         content: TextField(
           controller: controller,
-          decoration: const InputDecoration(
-            hintText: 'DELETE',
+          decoration: InputDecoration(
+            hintText: S.of(context).settingsDeleteConfirmHint,
             border: OutlineInputBorder(),
           ),
           textCapitalization: TextCapitalization.characters,
@@ -187,7 +188,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(S.of(context).cancel),
           ),
           ElevatedButton(
             onPressed: () {
@@ -195,8 +196,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 Navigator.pop(context);
                 // Would call API DELETE /auth/me then logout
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Account deletion requested'),
+                  SnackBar(
+                    content: Text(S.of(context).settingsAccountDeleted),
                     backgroundColor: AppColors.ember,
                   ),
                 );
@@ -206,7 +207,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               backgroundColor: AppColors.ember,
               foregroundColor: Colors.white,
             ),
-            child: const Text('Delete permanently'),
+            child: Text(S.of(context).delete),
           ),
         ],
       ),
@@ -245,7 +246,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Debug Info'),
+        title: Text(S.of(context).settingsDebugInfo),
         content: Text(
           'User ID: ${auth.userId ?? 'N/A'}\n'
           'Phone: ${auth.phone ?? 'N/A'}\n'
@@ -308,12 +309,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           _SettingsCard(children: [
             _SettingsTile(
               icon: Icons.person_rounded,
-              label: 'Edit profile',
+              label: S.of(context).settingsEditProfile,
               onTap: () {}, // → EditProfileScreen
             ),
             _SettingsTile(
               icon: Icons.phone_rounded,
-              label: 'Phone number',
+              label: S.of(context).settingsPhone,
               trailing: Text(
                 _maskPhone(auth.phone),
                 style: const TextStyle(fontSize: 12, color: AppColors.mist),
@@ -322,7 +323,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
             _SettingsTile(
               icon: Icons.email_rounded,
-              label: 'Email address',
+              label: S.of(context).settingsEmail,
               trailing: const Text(
                 'Add',
                 style: TextStyle(
@@ -339,7 +340,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
             _SettingsTile(
               icon: Icons.notifications_rounded,
-              label: 'Notification preferences',
+              label: S.of(context).settingsNotifications,
               onTap: () {}, // → NotificationPreferencesScreen
             ),
           ]),
@@ -351,17 +352,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           _SettingsCard(children: [
             _SettingsTile(
               icon: Icons.storefront_rounded,
-              label: 'My listings',
+              label: S.of(context).settingsMyListings,
               onTap: () => context.push(AppRoutes.myListings),
             ),
             _SettingsTile(
               icon: Icons.account_balance_rounded,
-              label: 'Payout bank account',
+              label: S.of(context).settingsPayoutBank,
               onTap: () {}, // → BankAccountScreen
             ),
             _SettingsTile(
               icon: Icons.analytics_rounded,
-              label: 'Seller analytics',
+              label: S.of(context).settingsSellerAnalytics,
               onTap: () {}, // → AnalyticsScreen
             ),
             _ProSellerTile(isSubscribed: auth.role == 'pro_seller'),
@@ -386,7 +387,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             if (_biometricAvailable)
               _SettingsTile(
                 icon: Icons.fingerprint_rounded,
-                label: 'Biometric login',
+                label: S.of(context).settingsBiometric,
                 trailing: Switch.adaptive(
                   value: _biometricEnabled,
                   onChanged: _setBiometric,
@@ -396,12 +397,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             _SettingsTile(
               icon: Icons.devices_rounded,
-              label: 'Active sessions',
+              label: S.of(context).settingsActiveSessions,
               onTap: () {}, // → ActiveSessionsScreen
             ),
             _SettingsTile(
               icon: Icons.delete_forever_rounded,
-              label: 'Delete account',
+              label: S.of(context).settingsDeleteAccount,
               labelColor: AppColors.ember,
               onTap: _deleteAccount,
               showChevron: false,
@@ -415,22 +416,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           _SettingsCard(children: [
             _SettingsTile(
               icon: Icons.help_outline_rounded,
-              label: 'Help center',
+              label: S.of(context).settingsHelpCenter,
               onTap: () => _launchUrl('https://mzadak.com/help'),
             ),
             _SettingsTile(
               icon: Icons.bug_report_rounded,
-              label: 'Report a bug',
+              label: S.of(context).settingsReportBug,
               onTap: _reportBug,
             ),
             _SettingsTile(
               icon: Icons.privacy_tip_rounded,
-              label: 'Privacy policy',
+              label: S.of(context).settingsPrivacyPolicy,
               onTap: () => _launchUrl('https://mzadak.com/privacy'),
             ),
             _SettingsTile(
               icon: Icons.description_rounded,
-              label: 'Terms of service',
+              label: S.of(context).settingsTerms,
               onTap: () => _launchUrl('https://mzadak.com/terms'),
             ),
           ]),
@@ -469,10 +470,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: AppColors.ember, width: 1.5),
                 ),
-                child: const Center(
+                child: Center(
                   child: Text(
-                    'Log out',
-                    style: TextStyle(
+                    S.of(context).settingsLogout,
+                    style: const TextStyle(
                       fontFamily: 'Sora',
                       fontSize: 15,
                       fontWeight: FontWeight.w700,

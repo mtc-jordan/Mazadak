@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mzadak/l10n/app_localizations.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/l10n/arabic_numerals.dart';
@@ -157,8 +158,8 @@ class EscrowOrderScreen extends ConsumerWidget {
     final labelUrl = await notifier.generateLabel();
     if (labelUrl != null && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('تم إنشاء بوليصة الشحن بنجاح'),
+        SnackBar(
+          content: Text(S.of(context).shippingLabelCreated),
           backgroundColor: AppColors.emerald,
         ),
       );
@@ -180,7 +181,7 @@ class EscrowOrderScreen extends ConsumerWidget {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('تأكيد الاستلام'),
+        title: Text(S.of(context).confirmReceiptTitle),
         content: const Text(
           'هل أنت متأكد من استلام المنتج بحالة جيدة؟\n\n'
           'سيتم تحرير المبلغ للبائع بعد التأكيد.',
@@ -188,7 +189,7 @@ class EscrowOrderScreen extends ConsumerWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('إلغاء'),
+            child: Text(S.of(context).cancel),
           ),
           ElevatedButton(
             onPressed: () {
@@ -199,7 +200,7 @@ class EscrowOrderScreen extends ConsumerWidget {
               backgroundColor: AppColors.emerald,
               foregroundColor: Colors.white,
             ),
-            child: const Text('تأكيد'),
+            child: Text(S.of(context).confirm),
           ),
         ],
       ),

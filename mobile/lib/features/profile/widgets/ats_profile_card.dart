@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/animations.dart';
 import '../../../core/theme/colors.dart';
 import '../../../core/theme/spacing.dart';
+import '../../../l10n/app_localizations.dart';
 
 /// ATS (Auction Trust Score) profile card with animated score bars.
 ///
@@ -359,37 +360,39 @@ class _ComponentBar extends StatelessWidget {
 
 /// Default ATS components matching the spec:
 /// identity, completion rate, speed, ratings, dispute-free.
-List<AtsComponent> defaultAtsComponents({
+List<AtsComponent> defaultAtsComponents(BuildContext context, {
   double identity = 1.0,
   double completionRate = 0.0,
   double speed = 0.0,
   double ratings = 0.0,
   double disputeFree = 1.0,
-}) =>
-    [
+}) {
+    final l = S.of(context);
+    return [
       AtsComponent(
-        label: 'التحقق من الهوية',
+        label: l.identityVerification,
         value: identity,
         icon: Icons.verified_user_rounded,
       ),
       AtsComponent(
-        label: 'نسبة الإتمام',
+        label: l.profileCompletion,
         value: completionRate,
         icon: Icons.check_circle_rounded,
       ),
       AtsComponent(
-        label: 'سرعة الاستجابة',
+        label: l.shippingSpeed,
         value: speed,
         icon: Icons.speed_rounded,
       ),
       AtsComponent(
-        label: 'التقييمات',
+        label: l.buyerRatings,
         value: ratings,
         icon: Icons.star_rounded,
       ),
       AtsComponent(
-        label: 'سجل خالٍ من النزاعات',
+        label: l.disputes,
         value: disputeFree,
         icon: Icons.shield_rounded,
       ),
     ];
+  }

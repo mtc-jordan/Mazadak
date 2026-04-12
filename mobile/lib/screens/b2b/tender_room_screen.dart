@@ -12,6 +12,7 @@ import '../../core/providers/core_providers.dart';
 import '../../core/theme/animations.dart';
 import '../../core/theme/colors.dart';
 import '../../core/theme/spacing.dart';
+import '../../l10n/app_localizations.dart';
 
 // ═══════════════════════════════════════════════════════════════
 // B2B Color Tokens — formal, cooler palette
@@ -397,7 +398,7 @@ class _TenderRoomScreenState extends ConsumerState<TenderRoomScreen> {
     final amountText = _amountController.text.trim();
     if (amountText.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a bid amount')),
+        SnackBar(content: Text(S.of(context).enterBidAmount)),
       );
       return;
     }
@@ -405,7 +406,7 @@ class _TenderRoomScreenState extends ConsumerState<TenderRoomScreen> {
     final amount = double.tryParse(amountText);
     if (amount == null || amount <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Invalid amount')),
+        SnackBar(content: Text(S.of(context).invalidAmount)),
       );
       return;
     }
@@ -447,7 +448,7 @@ class _TenderRoomScreenState extends ConsumerState<TenderRoomScreen> {
                 borderRadius: AppSpacing.radiusSm,
               ),
             ),
-            child: const Text('Submit Bid'),
+            child: Text(S.of(context).submitBid),
           ),
         ],
       ),
@@ -465,8 +466,8 @@ class _TenderRoomScreenState extends ConsumerState<TenderRoomScreen> {
           );
       if (ok && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Bid submitted successfully'),
+          SnackBar(
+            content: Text(S.of(context).bidSubmitted),
             backgroundColor: AppColors.emerald,
           ),
         );
@@ -1072,7 +1073,7 @@ class _BidForm extends StatelessWidget {
               color: AppColors.ink,
             ),
             decoration: InputDecoration(
-              hintText: 'Enter technical proposal or notes...',
+              hintText: S.of(context).technicalProposalHint,
               hintStyle: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
@@ -1124,10 +1125,10 @@ class _BidForm extends StatelessWidget {
                   color: AppColors.ink,
                   fontFamily: 'Sora',
                 ),
-                items: const [
-                  DropdownMenuItem(value: 30, child: Text('30 days')),
-                  DropdownMenuItem(value: 60, child: Text('60 days')),
-                  DropdownMenuItem(value: 90, child: Text('90 days')),
+                items: [
+                  DropdownMenuItem(value: 30, child: Text(S.of(context).days30)),
+                  DropdownMenuItem(value: 60, child: Text(S.of(context).days60)),
+                  DropdownMenuItem(value: 90, child: Text(S.of(context).days90)),
                 ],
                 onChanged: (v) {
                   if (v != null) onValidityChanged(v);

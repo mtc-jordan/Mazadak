@@ -6,6 +6,7 @@ import 'package:shimmer/shimmer.dart';
 import '../../core/providers/notification_provider.dart';
 import '../../core/theme/colors.dart';
 import '../../core/theme/spacing.dart';
+import '../../l10n/app_localizations.dart';
 
 // ══════════════════════════════════════════════════════════════════
 // Filter types
@@ -193,7 +194,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
               ListTile(
                 leading: const Icon(Icons.mark_email_read_rounded,
                     color: AppColors.navy),
-                title: const Text('Mark as read'),
+                title: Text(S.of(context).markAsRead),
                 onTap: () {
                   Navigator.pop(context);
                   _markRead(n);
@@ -202,7 +203,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
             ListTile(
               leading:
                   const Icon(Icons.delete_outline_rounded, color: AppColors.ember),
-              title: const Text('Delete'),
+              title: Text(S.of(context).delete),
               onTap: () {
                 Navigator.pop(context);
                 _delete(n);
@@ -530,7 +531,7 @@ class _NotificationRowState extends State<_NotificationRow>
       direction: DismissDirection.endToStart,
       onDismissed: (_) => widget.onDismissed(),
       background: Container(
-        alignment: Alignment.centerRight,
+        alignment: AlignmentDirectional.centerEnd,
         padding: const EdgeInsetsDirectional.only(end: AppSpacing.lg),
         color: AppColors.ember,
         child: const Icon(Icons.delete_rounded, color: Colors.white, size: 24),

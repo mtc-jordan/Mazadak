@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:dio/dio.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../core/l10n/arabic_numerals.dart';
 import '../../core/providers/core_providers.dart';
 import '../../core/providers/listings_provider.dart';
@@ -365,7 +366,7 @@ class _ActiveTab extends StatelessWidget {
     if (listings.isEmpty) {
       return _EmptyState(
         icon: Icons.storefront_rounded,
-        title: 'No active listings',
+        title: S.of(context).noActiveListings,
         titleAr: 'لا توجد إعلانات نشطة',
         ctaLabel: 'Snap-to-List takes 60 seconds →',
         onCta: () => context.push(AppRoutes.snapToList),
@@ -412,7 +413,7 @@ class _ActiveTab extends StatelessWidget {
               ListTile(
                 leading:
                     const Icon(Icons.edit_rounded, color: AppColors.navy),
-                title: const Text('Edit listing'),
+                title: Text(S.of(context).editListing),
                 onTap: () {
                   Navigator.pop(context);
                   _tryEdit(context, listing);
@@ -420,7 +421,7 @@ class _ActiveTab extends StatelessWidget {
               ),
             ListTile(
               leading: const Icon(Icons.gavel_rounded, color: AppColors.ember),
-              title: const Text('End early'),
+              title: Text(S.of(context).endEarly),
               onTap: () {
                 Navigator.pop(context);
                 _confirmEndEarly(context, listing);
@@ -428,13 +429,13 @@ class _ActiveTab extends StatelessWidget {
             ),
             ListTile(
               leading: const Icon(Icons.share_rounded, color: AppColors.navy),
-              title: const Text('Share'),
+              title: Text(S.of(context).share),
               onTap: () => Navigator.pop(context),
             ),
             ListTile(
               leading: const Icon(Icons.analytics_rounded,
                   color: AppColors.navy),
-              title: const Text('View analytics'),
+              title: Text(S.of(context).viewAnalytics),
               onTap: () => Navigator.pop(context),
             ),
             const SizedBox(height: AppSpacing.xs),
@@ -457,8 +458,8 @@ class _ActiveTab extends StatelessWidget {
       if (!context.mounted) return;
       if (e.response?.statusCode == 400) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Cannot edit listing with active bids'),
+          SnackBar(
+            content: Text(S.of(context).cannotEditWithBids),
             backgroundColor: AppColors.ember,
           ),
         );
@@ -470,7 +471,7 @@ class _ActiveTab extends StatelessWidget {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('End listing early?'),
+        title: Text(S.of(context).endListingEarly),
         content: const Text(
           'This action cannot be undone. If there are bids, '
           'the highest bidder wins.',
@@ -478,7 +479,7 @@ class _ActiveTab extends StatelessWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(S.of(context).cancel),
           ),
           ElevatedButton(
             onPressed: () {
@@ -489,7 +490,7 @@ class _ActiveTab extends StatelessWidget {
               backgroundColor: AppColors.ember,
               foregroundColor: Colors.white,
             ),
-            child: const Text('End now'),
+            child: Text(S.of(context).endNow),
           ),
         ],
       ),
@@ -740,9 +741,9 @@ class _EndedTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (listings.isEmpty) {
-      return const _EmptyState(
+      return _EmptyState(
         icon: Icons.history_rounded,
-        title: 'No ended listings',
+        title: S.of(context).noEndedListings,
         titleAr: 'لا توجد إعلانات منتهية',
       );
     }
@@ -914,9 +915,9 @@ class _DraftTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (listings.isEmpty) {
-      return const _EmptyState(
+      return _EmptyState(
         icon: Icons.drafts_rounded,
-        title: 'No drafts',
+        title: S.of(context).noDrafts,
         titleAr: 'لا توجد مسودات',
       );
     }
@@ -1058,7 +1059,7 @@ class _DraftListingCard extends StatelessWidget {
               color: AppColors.sand,
               borderRadius: BorderRadius.circular(2),
             ),
-            alignment: Alignment.centerLeft,
+            alignment: AlignmentDirectional.centerStart,
             child: FractionallySizedBox(
               widthFactor: percent,
               child: Container(
@@ -1105,9 +1106,9 @@ class _PendingTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (listings.isEmpty) {
-      return const _EmptyState(
+      return _EmptyState(
         icon: Icons.hourglass_top_rounded,
-        title: 'No pending reviews',
+        title: S.of(context).noPendingReviews,
         titleAr: 'لا توجد مراجعات معلّقة',
       );
     }

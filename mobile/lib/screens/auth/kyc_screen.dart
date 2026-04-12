@@ -13,6 +13,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/providers/core_providers.dart';
 import '../../core/router.dart';
 import '../../core/theme/colors.dart';
+import '../../l10n/app_localizations.dart';
 
 /// KYC identity verification — 3-step wizard:
 /// 1. National ID front photo
@@ -341,7 +342,7 @@ class _KycScreenState extends ConsumerState<KycScreen>
               centerTitle: true,
               actions: [
                 Padding(
-                  padding: const EdgeInsets.only(right: 16),
+                  padding: const EdgeInsetsDirectional.only(end: 16),
                   child: Center(
                     child: Text(
                       'Step ${_currentStep + 1} of 3',
@@ -566,7 +567,7 @@ class _KycScreenState extends ConsumerState<KycScreen>
                       ),
                       elevation: 0,
                     ),
-                    child: const Text('Go to Home · الرئيسية'),
+                    child: Text(S.of(context).authGoHome),
                   ),
                 ),
               ],
@@ -626,7 +627,7 @@ class _KycScreenState extends ConsumerState<KycScreen>
                 child: ElevatedButton.icon(
                   onPressed: () => _retryFromStep(2),
                   icon: const Icon(Icons.refresh_rounded),
-                  label: const Text('Retake selfie'),
+                  label: Text(S.of(context).authRetakeSelfie),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.gold,
                     foregroundColor: Colors.white,
@@ -720,7 +721,7 @@ class _IdUploadStep extends StatelessWidget {
                   child: ElevatedButton.icon(
                     onPressed: onTakePhoto,
                     icon: const Icon(Icons.camera_alt_rounded, size: 18),
-                    label: const Text('Take photo'),
+                    label: Text(S.of(context).authTakePhoto),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.navy,
                       foregroundColor: Colors.white,
@@ -744,7 +745,7 @@ class _IdUploadStep extends StatelessWidget {
                   child: OutlinedButton.icon(
                     onPressed: onPickGallery,
                     icon: const Icon(Icons.image_rounded, size: 18),
-                    label: const Text('Upload'),
+                    label: Text(S.of(context).authUpload),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.navy,
                       side: const BorderSide(color: AppColors.navy, width: 1.5),
@@ -787,12 +788,12 @@ class _IdUploadStep extends StatelessWidget {
                   ),
                   elevation: 0,
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text('Continue'),
-                    SizedBox(width: 6),
-                    Icon(Icons.arrow_forward_rounded, size: 18),
+                    Text(S.of(context).authContinue),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.arrow_forward_rounded, size: 18),
                   ],
                 ),
               ),
@@ -1197,7 +1198,7 @@ class _SelfieStep extends StatelessWidget {
             child: ElevatedButton.icon(
               onPressed: onTakePhoto,
               icon: const Icon(Icons.camera_alt_rounded, size: 20),
-              label: const Text('Take selfie'),
+              label: Text(S.of(context).authTakeSelfie),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.navy,
                 foregroundColor: Colors.white,
@@ -1238,16 +1239,16 @@ class _SelfieStep extends StatelessWidget {
                   ),
                   elevation: 0,
                 ),
-                child: const Text('Submit for verification'),
+                child: Text(S.of(context).authSubmitVerification),
               ),
             ),
           ),
           const SizedBox(height: 12),
           GestureDetector(
             onTap: onTakePhoto,
-            child: const Text(
-              'Retake selfie',
-              style: TextStyle(
+            child: Text(
+              S.of(context).authRetakeSelfie,
+              style: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
                 color: AppColors.gold,

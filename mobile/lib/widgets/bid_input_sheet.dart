@@ -9,6 +9,7 @@ import '../core/theme/animations.dart';
 import '../core/theme/colors.dart';
 import '../core/theme/haptics.dart';
 import '../core/theme/spacing.dart';
+import '../l10n/app_localizations.dart';
 
 /// Spring curve: cubic-bezier(0, 0.8, 0.3, 1).
 const _springCurve = Cubic(0, 0.8, 0.3, 1);
@@ -165,8 +166,8 @@ class _BidInputSheetState extends State<BidInputSheet>
     if (next < _minBid) {
       _shakeController.forward(from: 0);
       HapticFeedback.lightImpact();
-      setState(() => _errorText = 'Minimum bid is '
-          '${ArabicNumerals.formatCurrencyEn(_minBid, widget.currency)}');
+      setState(() => _errorText = S.of(context).minimumBid(
+          ArabicNumerals.formatCurrencyEn(_minBid, widget.currency)));
       return;
     }
     setState(() {
@@ -200,7 +201,7 @@ class _BidInputSheetState extends State<BidInputSheet>
 
     // Proxy validation
     if (_isProxy && _maxProxyAmount != null && _maxProxyAmount! < _bidAmount) {
-      setState(() => _errorText = 'Your proxy max is lower than your bid');
+      setState(() => _errorText = S.of(context).proxyMaxLowerThanBid);
       _shakeController.forward(from: 0);
       return;
     }
@@ -287,9 +288,9 @@ class _BidInputSheetState extends State<BidInputSheet>
               const SizedBox(height: 16),
 
               // ── Header: title + listing row ────────────────────
-              const Text(
-                'Place your bid · ضع مزايدتك',
-                style: TextStyle(
+              Text(
+                S.of(context).placeYourBid,
+                style: const TextStyle(
                   fontFamily: 'Sora',
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
@@ -522,9 +523,9 @@ class _BidInputSheetState extends State<BidInputSheet>
   Widget _buildConfirmContent() {
     switch (_confirmState) {
       case _ConfirmState.idle:
-        return const Text(
-          'Place bid · زايد الآن',
-          key: ValueKey('idle'),
+        return Text(
+          S.of(context).placeBid,
+          key: const ValueKey('idle'),
         );
       case _ConfirmState.loading:
         return const SizedBox(
@@ -834,9 +835,9 @@ class _ProxyToggle extends StatelessWidget {
             Expanded(
               child: Row(
                 children: [
-                  const Text(
-                    'Proxy bid · مزايدة وكيل',
-                    style: TextStyle(
+                  Text(
+                    S.of(context).proxyBid,
+                    style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
                       color: AppColors.navy,

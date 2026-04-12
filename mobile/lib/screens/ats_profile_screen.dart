@@ -7,6 +7,7 @@ import '../core/providers/core_providers.dart';
 import '../core/theme/animations.dart';
 import '../core/theme/colors.dart';
 import '../core/theme/spacing.dart';
+import '../l10n/app_localizations.dart';
 
 // ═══════════════════════════════════════════════════════════════════════
 //  ATS Profile Screen — SDD §5.4
@@ -151,32 +152,35 @@ class AtsProfile {
 
   AtsTier get tier => AtsTier.fromScore(score);
 
-  List<AtsSignal> get signals => [
+  List<AtsSignal> localizedSignals(BuildContext context) {
+    final l = S.of(context);
+    return [
         AtsSignal(
-            label: 'التحقق من الهوية',
+            label: l.identityVerification,
             value: identityScore,
             category: 'identity'),
         AtsSignal(
-            label: 'اكتمال الملف',
+            label: l.profileCompletion,
             value: completionScore,
             category: 'completion'),
         AtsSignal(
-            label: 'سرعة الشحن',
+            label: l.shippingSpeed,
             value: speedScore,
             category: 'speed'),
         AtsSignal(
-            label: 'تقييمات المشترين',
+            label: l.buyerRatings,
             value: ratingScore,
             category: 'ratings'),
         AtsSignal(
-            label: 'جودة القوائم',
+            label: l.listingQuality,
             value: qualityScore,
             category: 'quality'),
         AtsSignal(
-            label: 'النزاعات',
+            label: l.disputes,
             value: disputeScore,
             category: 'disputes'),
       ];
+  }
 
   factory AtsProfile.fromJson(Map<String, dynamic> json) => AtsProfile(
         score: json['ats_score'] as int? ?? 0,
@@ -734,7 +738,7 @@ class _AtsProfileScreenState extends ConsumerState<AtsProfileScreen>
   // ── Signal bars ───────────────────────────────────────────────────
 
   Widget _buildSignalBars(AtsProfile profile) {
-    final signals = profile.signals;
+    final signals = profile.localizedSignals(context);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -847,8 +851,8 @@ class _AtsProfileScreenState extends ConsumerState<AtsProfileScreen>
                     fontFamily: 'Sora',
                   ),
                 ),
-                const Text('الترتيب',
-                    style: TextStyle(fontSize: 12, color: AppColors.mist)),
+                Text(S.of(context).rankingLabel,
+                    style: const TextStyle(fontSize: 12, color: AppColors.mist)),
               ],
             ),
           ),
@@ -876,8 +880,8 @@ class _AtsProfileScreenState extends ConsumerState<AtsProfileScreen>
                   ),
                   textAlign: TextAlign.center,
                 ),
-                const Text('المستوى',
-                    style: TextStyle(fontSize: 12, color: AppColors.mist)),
+                Text(S.of(context).levelLabel,
+                    style: const TextStyle(fontSize: 12, color: AppColors.mist)),
               ],
             ),
           ),
@@ -907,21 +911,21 @@ class _AtsProfileScreenState extends ConsumerState<AtsProfileScreen>
           children: [
             _PerkCard(
               icon: Icons.shopping_bag_rounded,
-              label: 'المبيعات',
+              label: S.of(context).salesLabel,
               value: '${profile.totalSales}',
               color: AppColors.navy,
             ),
             const SizedBox(width: AppSpacing.xs),
             _PerkCard(
               icon: Icons.star_rounded,
-              label: 'التقييم',
+              label: S.of(context).ratingLabel,
               value: profile.avgRating.toStringAsFixed(1),
               color: AppColors.gold,
             ),
             const SizedBox(width: AppSpacing.xs),
             _PerkCard(
               icon: Icons.gavel_rounded,
-              label: 'النزاعات',
+              label: S.of(context).disputes,
               value: '${profile.disputeCount}',
               color: profile.disputeCount == 0
                   ? AppColors.emerald
@@ -930,7 +934,7 @@ class _AtsProfileScreenState extends ConsumerState<AtsProfileScreen>
             const SizedBox(width: AppSpacing.xs),
             _PerkCard(
               icon: Icons.percent_rounded,
-              label: 'العمولة',
+              label: S.of(context).commissionLabel,
               value: '${(tier.commissionRate * 100).toStringAsFixed(tier == AtsTier.silver ? 1 : 0)}%',
               color: tier.color,
             ),

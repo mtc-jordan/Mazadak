@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../core/l10n/arabic_numerals.dart';
 import '../../core/providers/core_providers.dart';
 import '../../core/providers/create_listing_provider.dart';
@@ -41,10 +42,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   List<String> _recentSearches = [];
 
   static const _fog = Color(0xFFF5F2EC);
-  static const _sortOptions = [
-    (key: 'ends_asc', label: 'Ending soon'),
-    (key: 'price_asc', label: 'Lowest price'),
-    (key: 'bid_count_desc', label: 'Most bids'),
+  List<({String key, String label})> _localizedSortOptions(BuildContext context) => [
+    (key: 'ends_asc', label: S.of(context).sortEndingSoon),
+    (key: 'price_asc', label: S.of(context).sortLowestPrice),
+    (key: 'bid_count_desc', label: S.of(context).sortMostBids),
   ];
   static const _recentSearchesKey = 'mzadak_recent_searches';
 
@@ -276,7 +277,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                   if (_hasSearched) ...[
                     const SizedBox(height: 8),
                     _SortChips(
-                      options: _sortOptions,
+                      options: _localizedSortOptions(context),
                       selected: _sortBy,
                       onSelected: _onSortChanged,
                     ),
@@ -331,7 +332,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           border: InputBorder.none,
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          hintText: 'Search auctions... ابحث',
+          hintText: S.of(context).searchHint,
           hintStyle: const TextStyle(
             fontSize: 13,
             color: AppColors.mist,
@@ -942,7 +943,7 @@ class _ActiveFilterChips extends StatelessWidget {
 
     if (filters.isCertified == true) {
       chips.add(_ActiveChip(
-        label: 'موثّق',
+        label: S.of(context).certifiedBadge,
         onRemove: () => onRemove(filters.copyWith(clearCertified: true)),
       ));
     }
