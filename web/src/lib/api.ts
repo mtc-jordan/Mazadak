@@ -130,6 +130,17 @@ export const users = {
     api.post(`/admin/users/${id}/restore`, { reason }),
 };
 
+// ── KYC Review ──────────────────────────────────────────────
+
+export const kyc = {
+  queue: () => api.get("/admin/kyc/queue"),
+  documentUrl: (docId: string) =>
+    api.get(`/admin/kyc/documents/${docId}/url`),
+  approve: (userId: string) => api.post(`/admin/kyc/${userId}/approve`),
+  reject: (userId: string, reason: string) =>
+    api.post(`/admin/kyc/${userId}/reject`, { reason }),
+};
+
 // ── B2B Tender Rooms ────────────────────────────────────────
 
 import type {

@@ -12,6 +12,7 @@ import {
   LogOut,
   ChevronRight,
   Briefcase,
+  IdCard,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -34,6 +35,11 @@ const NAV_ITEMS = [
     href: "/admin/users",
     label: "Users",
     icon: Users,
+  },
+  {
+    href: "/admin/kyc",
+    label: "KYC Review",
+    icon: IdCard,
   },
   {
     href: "/admin/tenders",

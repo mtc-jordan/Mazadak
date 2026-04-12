@@ -22,10 +22,11 @@ from decimal import Decimal
 from uuid import uuid4
 
 from redis.asyncio import Redis
-from sqlalchemy import select, text, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.services.admin.models import AdminAuditLog
 from app.services.auth.models import KYCStatus, UserKycDocument, User
 
 logger = logging.getLogger(__name__)
@@ -192,24 +193,26 @@ async def _insert_audit_log(
     db: AsyncSession,
     admin_id: str,
     action: str,
-    target_type: str,
-    target_id: str,
-    detail: dict | None = None,
+    entity_type: str,
+    entity_id: str,
+    after_state: dict | None = None,
 ) -> None:
-    """Insert a row into admin_audit_log (append-only)."""
-    await db.execute(
-        text("""
-            INSERT INTO admin_audit_log (id, admin_id, action, target_type, target_id, detail)
-            VALUES (:id, :admin_id, :action, :target_type, :target_id, :detail::jsonb)
-        """),
-        {
-            "id": str(uuid4()),
-            "admin_id": admin_id,
-            "action": action,
-            "target_type": target_type,
-            "target_id": target_id,
-            "detail": str(detail) if detail else None,
-        },
+    """Insert a row into admin_audit_log via the ORM.
+
+    The previous version of this helper used hand-rolled SQL with the wrong
+    column names (target_type/target_id/detail) AND a broken ``::jsonb`` cast
+    that asyncpg could not parse — every KYC approve/reject 500'd as a
+    result.  Use the ORM model so the schema stays the source of truth.
+    """
+    db.add(
+        AdminAuditLog(
+            id=str(uuid4()),
+            admin_id=admin_id,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            after_state=after_state,
+        )
     )
 
 
@@ -406,18 +409,15 @@ async def review_kyc(
         user.kyc_reviewed_at = now
         user.kyc_rejection_reason = reason
 
-    # Insert audit log entry
-    try:
-        await _insert_audit_log(
-            db=db,
-            admin_id=reviewer_id,
-            action=f"kyc_{decision}",
-            target_type="user",
-            target_id=user_id,
-            detail={"reason": reason} if reason else None,
-        )
-    except Exception:
-        logger.warning("Failed to insert audit log for KYC review", exc_info=True)
+    # Insert audit log entry via the ORM (same model the rest of admin uses).
+    await _insert_audit_log(
+        db=db,
+        admin_id=reviewer_id,
+        action=f"kyc_{decision}",
+        entity_type="user",
+        entity_id=user_id,
+        after_state={"reason": reason} if reason else None,
+    )
 
     await db.flush()
 

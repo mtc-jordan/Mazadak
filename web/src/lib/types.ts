@@ -139,7 +139,38 @@ export const DISPUTE_REASON_CODES = [
 
 export type UserRole = "buyer" | "seller" | "pro_seller" | "admin";
 export type UserStatus = "active" | "warned" | "suspended" | "banned";
-export type KycStatus = "none" | "pending" | "verified" | "rejected";
+export type KycStatus =
+  | "not_started"
+  | "none"
+  | "pending"
+  | "pending_review"
+  | "verified"
+  | "rejected";
+
+// ── KYC Review (admin queue) ────────────────────────────────
+
+export type KycDocumentType = "id_front" | "id_back" | "selfie";
+
+export interface KycQueueItem {
+  id: string; // document id
+  user_id: string;
+  user_phone: string;
+  document_type: KycDocumentType;
+  s3_key: string;
+  rekognition_confidence: number | null;
+  status: "pending_review";
+  uploaded_at: string;
+}
+
+/** Aggregated view: one row per user, with their three docs grouped. */
+export interface KycReviewUser {
+  user_id: string;
+  user_phone: string;
+  /** Lowest non-null confidence across documents (None when Rekognition was unavailable). */
+  confidence: number | null;
+  uploaded_at: string;
+  documents: KycQueueItem[];
+}
 
 export interface User {
   id: string;
@@ -190,7 +221,9 @@ export type AdminAction =
   | "reject_listing"
   | "require_edit"
   | "escalate_listing"
-  | "resolve_dispute";
+  | "resolve_dispute"
+  | "approve_kyc"
+  | "reject_kyc";
 
 export interface AuditLogEntry {
   action: AdminAction;

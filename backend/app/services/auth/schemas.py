@@ -216,8 +216,14 @@ class KYCQueueItem(BaseModel):
 
 
 class KYCReviewRequest(BaseModel):
-    decision: str = Field(..., pattern=r"^(approve|reject)$")
-    reason: str = Field(default="", max_length=500)
+    """Body for ``POST /admin/kyc/{user_id}/reject``.
+
+    The decision is implicit from the URL, so the body only carries the
+    rejection reason. ``min_length=10`` mirrors the admin UI requirement
+    so reviewers must give the user actionable feedback.
+    """
+
+    reason: str = Field(..., min_length=10, max_length=500)
 
 
 # ── Phone number change (FR-AUTH-010) ──────────────────────────

@@ -9,7 +9,7 @@ from app.core.database import get_db
 from app.services.auth import schemas
 from app.services.auth import kyc_service
 from app.services.auth.dependencies import require_role
-from app.services.auth.models import User
+from app.services.auth.models import User, UserKycDocument
 
 router = APIRouter(prefix="/admin/kyc", tags=["admin-kyc"])
 
@@ -29,6 +29,36 @@ async def get_kyc_queue(
     """
     items = await kyc_service.get_pending_reviews(db)
     return items
+
+
+@router.get("/documents/{doc_id}/url")
+async def get_kyc_document_url(
+    doc_id: str,
+    admin: User = Depends(require_role("admin", "superadmin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a short-lived presigned GET URL for an admin to view a KYC document.
+
+    Looks the document up by id (rather than accepting an arbitrary s3_key from
+    the client) so a compromised admin token cannot enumerate the bucket.
+    """
+    doc = await db.get(UserKycDocument, doc_id)
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "DOCUMENT_NOT_FOUND", "message_en": "KYC document not found"},
+        )
+    try:
+        url = kyc_service.generate_reviewer_url(doc.s3_key)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "S3_PRESIGN_FAILED",
+                "message_en": "Could not generate document URL",
+            },
+        ) from exc
+    return {"url": url, "document_type": doc.document_type, "expires_in": 300}
 
 
 @router.post(
