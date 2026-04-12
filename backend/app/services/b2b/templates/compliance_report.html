@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tender Compliance Report — {{ room.tender_reference }}</title>
+<style>
+  @page { size: A4; margin: 20mm 15mm; }
+  body { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 10pt; color: #111; }
+  h1 { font-size: 18pt; margin: 0 0 4pt; color: #1a1a1a; }
+  h2 { font-size: 13pt; margin: 16pt 0 6pt; color: #1a1a1a; border-bottom: 1pt solid #888; padding-bottom: 2pt; }
+  .meta { font-size: 9pt; color: #555; margin-bottom: 12pt; }
+  .badge { display: inline-block; padding: 2pt 6pt; border-radius: 3pt; font-size: 8pt; font-weight: bold; text-transform: uppercase; }
+  .badge-sealed { background: #f0e6ff; color: #5a1a9a; }
+  .badge-open { background: #e1f5d8; color: #2a6f2a; }
+  .badge-results { background: #fff3cd; color: #8a6d1a; }
+  table { width: 100%; border-collapse: collapse; margin-top: 6pt; }
+  th, td { padding: 4pt 6pt; border-bottom: 0.5pt solid #ccc; text-align: left; }
+  th { background: #f4f4f4; font-weight: bold; font-size: 9pt; text-transform: uppercase; }
+  tr.winner td { background: #e8f5e0; font-weight: bold; }
+  .right { text-align: right; }
+  .kv { margin: 2pt 0; }
+  .kv strong { display: inline-block; width: 140pt; color: #555; }
+  .footer { margin-top: 24pt; padding-top: 8pt; border-top: 0.5pt solid #888; font-size: 8pt; color: #777; }
+  .signature { margin-top: 20pt; }
+  .signature-line { border-top: 0.5pt solid #333; width: 200pt; margin-top: 24pt; padding-top: 2pt; font-size: 8pt; }
+</style>
+</head>
+<body>
+
+<h1>Tender Compliance Report</h1>
+<div class="meta">
+  Reference: <strong>{{ room.tender_reference }}</strong> &middot;
+  Generated: {{ generated_at }} &middot;
+  <span class="badge badge-{{ 'sealed' if room.sealed else 'open' }}">
+    {{ 'Sealed Bid' if room.sealed else 'Open Bid' }}
+  </span>
+  <span class="badge badge-results">{{ room.status }}</span>
+</div>
+
+<h2>Room Details</h2>
+<div class="kv"><strong>Client:</strong> {{ room.client_name }}{% if room.client_name_ar %} / {{ room.client_name_ar }}{% endif %}</div>
+<div class="kv"><strong>Submission Deadline:</strong> {{ room.submission_deadline }}</div>
+<div class="kv"><strong>Results Announced:</strong> {{ room.results_announced_at or "—" }}</div>
+<div class="kv"><strong>Minimum Lot Amount:</strong> {{ "{:,}".format(room.min_lot_amount) }} cents
+  ({{ "{:,.2f}".format(room.min_lot_amount / 100) }} JOD)</div>
+{% if room.estimated_value %}
+<div class="kv"><strong>Estimated Value:</strong> {{ "{:,.2f}".format(room.estimated_value / 100) }} JOD</div>
+{% endif %}
+{% if room.description %}
+<div class="kv"><strong>Description:</strong> {{ room.description }}</div>
+{% endif %}
+
+<h2>Bids Received ({{ room.bids | length }})</h2>
+{% if room.bids %}
+<table>
+  <thead>
+    <tr>
+      <th>Rank</th>
+      <th>Bidder</th>
+      <th>Submission Ref</th>
+      <th class="right">Amount (JOD)</th>
+      <th class="right">Validity</th>
+      <th>Submitted At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for bid in room.bids %}
+    <tr class="{{ 'winner' if bid.is_winner else '' }}">
+      <td>{{ loop.index }}{% if bid.is_winner %} ★{% endif %}</td>
+      <td>{{ bid.bidder_name or bid.bidder_id[:8] }}</td>
+      <td>{{ bid.submission_ref or "—" }}</td>
+      <td class="right">{{ "{:,.2f}".format(bid.amount / 100) }}</td>
+      <td class="right">{{ bid.validity_days }} days</td>
+      <td>{{ bid.submitted_at }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p><em>No bids were submitted for this tender.</em></p>
+{% endif %}
+
+<h2>Pre-Qualified Invitees ({{ room.invitations | length }})</h2>
+{% if room.invitations %}
+<table>
+  <thead>
+    <tr>
+      <th>Bidder</th>
+      <th>Status</th>
+      <th class="right">Min ATS</th>
+      <th>Min KYC</th>
+      <th>Invited At</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for inv in room.invitations %}
+    <tr>
+      <td>{{ inv.user_name or inv.user_id[:8] }}</td>
+      <td>{{ inv.status }}</td>
+      <td class="right">{{ inv.min_ats_score or "—" }}</td>
+      <td>{{ inv.min_kyc_level or "—" }}</td>
+      <td>{{ inv.invited_at }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p><em>No invitations recorded.</em></p>
+{% endif %}
+
+<div class="signature">
+  <div class="signature-line">MZADAK Platform Authorized Representative</div>
+</div>
+
+<div class="footer">
+  This document was generated automatically by the MZADAK B2B Tender platform.
+  It is intended as a compliance audit record of all sealed bids received for the
+  above tender reference. All bid amounts, timestamps, and bidder identities are
+  preserved unchanged from the original submissions.
+  هذا المستند وثيقة تدقيق الامتثال الصادرة تلقائيًا عن منصة مزاداك للمناقصات.
+</div>
+
+</body>
+</html>

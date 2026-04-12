@@ -199,3 +199,109 @@ export interface AuditLogEntry {
   reason: string;
   metadata?: Record<string, unknown>;
 }
+
+// ── B2B Tender Rooms ────────────────────────────────────────
+
+export type B2BRoomStatus =
+  | "open"
+  | "closed"
+  | "cancelled"
+  | "results_announced";
+
+export interface B2BRoomListItem {
+  id: string;
+  client_name: string;
+  client_name_ar?: string | null;
+  tender_reference: string;
+  status: B2BRoomStatus;
+  submission_deadline: string;
+  sealed: boolean;
+  min_lot_amount: number; // cents
+  estimated_value?: number | null;
+  bid_count: number;
+  invitation_count: number;
+  created_at: string;
+}
+
+export interface B2BRoomListResponse {
+  items: B2BRoomListItem[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export interface B2BBidItem {
+  id: string;
+  bidder_id: string;
+  bidder_name?: string | null;
+  amount: number; // cents
+  notes?: string | null;
+  validity_days: number;
+  is_winner: boolean;
+  submitted_at: string;
+  submission_ref?: string | null;
+}
+
+export interface B2BInvitationItem {
+  id: string;
+  user_id: string;
+  user_name?: string | null;
+  status: "pending" | "accepted" | "declined" | "revoked";
+  min_ats_score?: number | null;
+  min_kyc_level?: string | null;
+  invited_at: string;
+  responded_at?: string | null;
+}
+
+export interface B2BRoomDetail {
+  id: string;
+  client_name: string;
+  client_name_ar?: string | null;
+  tender_reference: string;
+  description?: string | null;
+  status: B2BRoomStatus;
+  submission_deadline: string;
+  results_announced_at?: string | null;
+  sealed: boolean;
+  min_lot_amount: number;
+  estimated_value?: number | null;
+  client_logo_url?: string | null;
+  documents: Array<{ name?: string; size?: string; url?: string }>;
+  created_at: string;
+  bids: B2BBidItem[];
+  invitations: B2BInvitationItem[];
+}
+
+export interface B2BAnalytics {
+  room_id: string;
+  invited_count: number;
+  bid_count: number;
+  participation_rate: number; // 0..1
+  avg_bid_amount?: number | null;
+  min_bid_amount?: number | null;
+  max_bid_amount?: number | null;
+  price_vs_estimate_ratio?: number | null;
+  winner_amount?: number | null;
+  time_to_close_hours?: number | null;
+}
+
+export interface B2BCreateRoomRequest {
+  client_name: string;
+  client_name_ar?: string | null;
+  tender_reference: string;
+  description?: string | null;
+  submission_deadline: string; // ISO
+  sealed?: boolean;
+  min_lot_amount?: number; // cents, default 1_000_000
+  estimated_value?: number | null;
+  client_logo_url?: string | null;
+  documents?: Array<Record<string, unknown>>;
+}
+
+export interface B2BInviteRequest {
+  invitations: Array<{
+    user_id: string;
+    min_ats_score?: number | null;
+    min_kyc_level?: string | null;
+  }>;
+}

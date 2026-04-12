@@ -130,6 +130,63 @@ export const users = {
     api.post(`/admin/users/${id}/restore`, { reason }),
 };
 
+// ── B2B Tender Rooms ────────────────────────────────────────
+
+import type {
+  B2BCreateRoomRequest,
+  B2BInviteRequest,
+} from "./types";
+
+export const tenders = {
+  list: (params?: { status?: string; page?: number; per_page?: number }) =>
+    api.get("/admin/tenders/", { params }),
+
+  get: (id: string) => api.get(`/admin/tenders/${id}`),
+
+  create: (data: B2BCreateRoomRequest) =>
+    api.post("/admin/tenders/", data),
+
+  update: (
+    id: string,
+    data: Partial<{
+      status: string;
+      submission_deadline: string;
+      description: string;
+      client_logo_url: string;
+      estimated_value: number;
+    }>
+  ) => api.patch(`/admin/tenders/${id}`, data),
+
+  invite: (id: string, data: B2BInviteRequest) =>
+    api.post(`/admin/tenders/${id}/invite`, data),
+
+  revokeInvitation: (id: string, invitationId: string) =>
+    api.delete(`/admin/tenders/${id}/invitations/${invitationId}`),
+
+  announce: (id: string, winnerBidId: string) =>
+    api.post(`/admin/tenders/${id}/announce`, { winner_bid_id: winnerBidId }),
+
+  analytics: (id: string) => api.get(`/admin/tenders/${id}/analytics`),
+
+  exportCompliancePdf: (id: string) =>
+    api.get(`/admin/tenders/${id}/export/compliance-pdf`, {
+      responseType: "blob",
+    }),
+
+  exportAwardLetter: (id: string, bidId: string) =>
+    api.get(`/admin/tenders/${id}/export/award-letter/${bidId}`, {
+      responseType: "blob",
+    }),
+
+  importCsv: (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return api.post("/admin/tenders/import-csv", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+};
+
 // ── Audit Log ───────────────────────────────────────────────
 
 export const auditLog = {

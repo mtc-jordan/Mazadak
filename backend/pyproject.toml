@@ -70,6 +70,7 @@ dependencies = [
     "python-dateutil>=2.9.0",
     "imagehash>=4.3.0",             # perceptual hashing for duplicate detection
     "jinja2>=3.1.0",                # notification template rendering
+    "weasyprint>=62.0",             # B2B compliance PDF export (tender rooms)
     "flower>=2.0.0",                # Celery monitoring dashboard
 ]
 

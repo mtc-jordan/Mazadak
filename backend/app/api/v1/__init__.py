@@ -16,6 +16,8 @@ from app.services.ai.router import router as ai_router
 from app.services.whatsapp_bot.router import router as wa_bot_router
 from app.services.admin.router import router as admin_router
 from app.services.bot.router import router as bot_router
+from app.services.b2b.router import router as b2b_router
+from app.services.b2b.router import admin_router as b2b_admin_router
 
 router = APIRouter()
 
@@ -31,3 +33,5 @@ router.include_router(ai_router)
 router.include_router(wa_bot_router)
 router.include_router(admin_router)
 router.include_router(bot_router)
+router.include_router(b2b_router)
+router.include_router(b2b_admin_router)

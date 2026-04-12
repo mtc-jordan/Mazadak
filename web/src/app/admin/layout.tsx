@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   LogOut,
   ChevronRight,
+  Briefcase,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -33,6 +34,11 @@ const NAV_ITEMS = [
     href: "/admin/users",
     label: "Users",
     icon: Users,
+  },
+  {
+    href: "/admin/tenders",
+    label: "B2B Tenders",
+    icon: Briefcase,
   },
 ];
 

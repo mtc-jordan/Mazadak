@@ -24,6 +24,7 @@ from app.services.notification.models import *  # noqa: F401,F403
 from app.services.ai.models import *          # noqa: F401,F403
 from app.services.whatsapp_bot.models import *  # noqa: F401,F403
 from app.services.admin.models import *        # noqa: F401,F403
+from app.services.b2b.models import *          # noqa: F401,F403
 
 config = context.config
 
